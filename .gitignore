@@ -1,0 +1,10 @@
+NVApi
+nvapi
+build
+dist
+.vscode
+*.swp
+*.tmp
+*.log
+*.bak
+
