@@ -1,0 +1,49 @@
+{
+  "version": "1.1",
+  "engine": "linux/amd64|Transformer|1.40.11|1b271555882eacdfb4e6598d6d0552e9b9b1449b|2024-02-02_01:36:22PM",
+  "containerized": false,
+  "host_distro": {
+    "name": "Fedora Linux",
+    "version": "39",
+    "display_name": "Fedora Linux 39 (Thirty Nine)"
+  },
+  "type": "build",
+  "state": "error",
+  "target_reference": ".",
+  "system": {
+    "type": "",
+    "release": "",
+    "distro": {
+      "name": "",
+      "version": "",
+      "display_name": ""
+    }
+  },
+  "source_image": {
+    "identity": {
+      "id": ""
+    },
+    "size": 0,
+    "size_human": "",
+    "create_time": "",
+    "docker_version": "",
+    "architecture": "",
+    "container_entry": {
+      "exe_path": ""
+    }
+  },
+  "minified_image_size": 0,
+  "minified_image_size_human": "",
+  "minified_image": "",
+  "minified_image_id": "",
+  "minified_image_digest": "",
+  "minified_image_has_data": false,
+  "minified_by": 0,
+  "artifact_location": "",
+  "container_report_name": "",
+  "seccomp_profile_name": "",
+  "apparmor_profile_name": "",
+  "image_stack": null,
+  "image_created": false,
+  "image_build_engine": ""
+}

@@ -1,0 +1,53 @@
+name: "Build NVApi Container and Release to ghcr"
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Build the Docker image first
+      - uses: docker/build-push-action@v5
+        with:
+          push: false
+          tags: nvapi:latest
+
+      # Slim the Image
+      - uses: kitabisa/docker-slim-action@v1
+        env:
+          DSLIM_HTTP_PROBE: false
+          INCLUDE_BIN: '/usr/local/cuda-11.8/targets/x86_64-linux/include/nvml.h'
+        with:
+          target: nvapi:latest
+          tag: "latest"
+          overwrite: true
+
+      # Docker Hub Login
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Push to the registry
+      - run: |
+          docker tag nvapi:latest ghcr.io/sammcj/nvapi/nvapi:latest
+          docker push ghcr.io/sammcj/nvapi/nvapi:latest
+
+          echo "Pushed to ghcr.io/sammcj/nvapi/nvapi:latest" >> "$GITHUB_STEP_SUMMARY"
