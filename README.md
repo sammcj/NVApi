@@ -78,15 +78,22 @@ curl http://localhost:9999/gpu
 
 ```json
 {
-  "gpu_utilisation": 50,
-  "memory_utilisation": 30,
-  "power_watts": 200,
-  "memory_total_gb": 12.0,
-  "memory_used_gb": 4.0,
-  "memory_free_gb": 8.0,
-  "memory_usage": "33%",
-  "temperature": 50,
-  "fan_speed": 30
+	"gpu_utilisation": 50,
+	"memory_utilisation": 30,
+	"power_watts": 200,
+	"memory_total_gb": 12.0,
+	"memory_used_gb": 4.0,
+	"memory_free_gb": 8.0,
+	"memory_usage": "33%",
+	"temperature": 50,
+	"fan_speed": 30,
+	"processes": [{
+		"Pid": 2238874,
+		"UsedGpuMemory": 10148118528,
+		"GpuInstanceId": 4294967295,
+		"ComputeInstanceId": 4294967295,
+		"Name": "/tmp/ollama630272566/runners/cuda_v12/ollama_llama_server --model /home/llm/.ollama/models/blobs/sha256-583c616da14b82930f887f991ab446711da0b029166200b67892d7c9f8f45958 --ctx-size 12288 --batch-size 5"
+	}]
 }
 ```
 

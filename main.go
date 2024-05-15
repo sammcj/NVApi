@@ -7,13 +7,15 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/NVIDIA/go-nvml/pkg/nvml"
 )
 
-const version = "1.0.0"
+const version = "1.0.1"
 
 type GPUInfo struct {
 	GPUUtilisation  uint `json:"gpu_utilisation"`
@@ -25,6 +27,7 @@ type GPUInfo struct {
 	MemoryUsage   string `json:"memory_usage"`
 	Temperature   uint `json:"temperature"`
 	FanSpeed      uint `json:"fan_speed"`
+	Processes		 []ProcessInfo `json:"processes"`
 }
 
 type rateLimiter struct {
@@ -33,6 +36,15 @@ type rateLimiter struct {
 	rate     float64
 	mu       sync.Mutex
 	lastTime time.Time
+}
+
+type ProcessInfo struct {
+	Pid                uint32
+	UsedGpuMemoryMb      uint64
+	GpuInstanceId      uint32
+	ComputeInstanceId  uint32
+	Name              string
+	Arguments				 []string
 }
 
 func (rl *rateLimiter) takeToken() bool {
@@ -99,6 +111,43 @@ func GetGPUInfo() ([]GPUInfo, error) {
 			return nil, fmt.Errorf("unable to get fan speed: %v", nvml.ErrorString(ret))
 		}
 
+		processes, ret := nvml.DeviceGetComputeRunningProcesses(device)
+		if ret != nvml.SUCCESS {
+			return nil, fmt.Errorf("unable to get running processes: %v", nvml.ErrorString(ret))
+		}
+		processesInfo := make([]ProcessInfo, len(processes))
+		for i, process := range processes {
+			// now use the pid to get the process name (e.g. /bin/ollama serve)
+			cmd := exec.Command("ps", "-p", fmt.Sprintf("%d", process.Pid), "-o", "command=")
+			output, err := cmd.Output()
+			if err != nil {
+				return nil, fmt.Errorf("unable to get process name: %v", err)
+			}
+			// remove anything after the first newline
+			output = []byte(strings.Split(string(output), "\n")[0])
+
+			// split the output process string into a slice of strings, the first element is the process name, the rest are the arguments
+			processString := strings.Split(string(output), " ")
+			processName := processString[0]
+			arguments := processString[1:]
+			// if arguments are longer than 500 characters, truncate them
+			if len(arguments) > 500 {
+				arguments = arguments[:500]
+			}
+
+			// append the new process info struct to the processesInfo slice
+			processesInfo[i] = ProcessInfo{
+				Pid: process.Pid,
+				UsedGpuMemoryMb: process.UsedGpuMemory / 1024 / 1024,
+				Name: processName,
+				Arguments: arguments,
+			}
+
+			fmt.Println("Process: ", processName)
+		}
+
+		fmt.Println("Processes: ", processesInfo)
+
 		memoryTotal := float64(memory.Total) / 1024 / 1024 / 1024
 		memoryUsed := float64(memory.Used) / 1024 / 1024 / 1024
 		memoryFree := float64(memory.Free) / 1024 / 1024 / 1024
@@ -114,6 +163,7 @@ func GetGPUInfo() ([]GPUInfo, error) {
 			MemoryUsage:   memoryUsage,
 			Temperature:   uint(temperature),
 			FanSpeed:      uint(fanSpeed),
+			Processes:		 processesInfo[:],
 		}
 
 		gpuInfos[i] = gpuInfo
@@ -319,6 +369,7 @@ func main() {
 			"/gpu/memory_usage": func(gpuInfo *GPUInfo) interface{} { return gpuInfo.MemoryUsage },
 			"/gpu/temperature": func(gpuInfo *GPUInfo) interface{} { return gpuInfo.Temperature },
 			"/gpu/fan_speed": func(gpuInfo *GPUInfo) interface{} { return gpuInfo.FanSpeed },
+			"/gpu/processes": func(gpuInfo *GPUInfo) interface{} { return gpuInfo.Processes },
 			"/gpu/all": func(gpuInfo *GPUInfo) interface{} { return gpuInfo },
 		}
 
