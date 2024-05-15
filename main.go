@@ -41,8 +41,6 @@ type rateLimiter struct {
 type ProcessInfo struct {
 	Pid                uint32
 	UsedGpuMemoryMb      uint64
-	GpuInstanceId      uint32
-	ComputeInstanceId  uint32
 	Name              string
 	Arguments				 []string
 }

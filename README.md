@@ -90,8 +90,6 @@ curl http://localhost:9999/gpu
 	"processes": [{
 		"Pid": 2238874,
 		"UsedGpuMemoryMb": 9678,
-		"GpuInstanceId": 0,
-		"ComputeInstanceId": 0,
 		"Name": "/tmp/ollama630272566/runners/cuda_v12/ollama_llama_server",
 		"Arguments": ["--model", "/home/llm/.ollama/models/blobs/sha256-583c616da14b82930f887f991ab446711da0b029166200b67892d7c9f8f45958", "--ctx-size", "12288", "--batch-size", "512", "--embedding", "--log-disable", "--n-gpu-layers", "33", "--flash-attn", "--parallel", "6", "--port", "39069"]
 	}]
