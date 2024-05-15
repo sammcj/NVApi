@@ -2,6 +2,8 @@
 
 A lightweight API that returns Nvidia GPU utilisation information.
 
+![](screenshots/json_response.png)
+
 ## Usage
 
 ### Docker Container
@@ -14,38 +16,7 @@ The application can be run as a container:
 docker build -t nvapi:latest .
 ```
 
-Or using docker-compose:
-
-```yaml
-x-common: &common
-  restart: unless-stopped
-  security_opt:
-    - no-new-privileges:true
-
-x-gpu: &gpu
-  runtime: nvidia
-  deploy:
-    resources:
-      reservations:
-        devices:
-          - driver: nvidia
-            count: all
-            capabilities: ["compute", "utility", "graphics"]
-
-services:
-  &name nvapi:
-    <<: [*common, *gpu]
-    # image: ghcr.io/sammcj/nvapi:latest # Work in progress!
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: *name
-    hostname: *name
-    profiles:
-      - *name
-    ports:
-      - 9999:9999
-```
+Or using docker-compose see [docker-compose.yml](docker-compose.yml) for an example configuration.
 
 ### Local Installation
 
@@ -80,18 +51,18 @@ curl http://localhost:9999/gpu
 [{
 	"gpu_utilisation": 0,
 	"memory_utilisation": 0,
-	"power_watts": 22,
+	"power_watts": 23,
 	"memory_total_gb": 24,
 	"memory_used_gb": 9.77,
 	"memory_free_gb": 14.23,
-	"memory_usage": "41",
-	"temperature": 34,
+	"memory_usage_percent": 41,
+	"temperature": 35,
 	"fan_speed": 0,
 	"processes": [{
-		"Pid": 2238874,
+		"Pid": 2345831,
 		"UsedGpuMemoryMb": 9678,
 		"Name": "/tmp/ollama630272566/runners/cuda_v12/ollama_llama_server",
-		"Arguments": ["--model", "/home/llm/.ollama/models/blobs/sha256-583c616da14b82930f887f991ab446711da0b029166200b67892d7c9f8f45958", "--ctx-size", "12288", "--batch-size", "512", "--embedding", "--log-disable", "--n-gpu-layers", "33", "--flash-attn", "--parallel", "6", "--port", "39069"]
+		"Arguments": ["--model", "/home/llm/.ollama/models/blobs/sha256-583c616da14b82930f887f991ab446711da0b029166200b67892d7c9f8f45958", "--ctx-size", "12288", "--batch-size", "512", "--embedding", "--log-disable", "--n-gpu-layers", "33", "--flash-attn", "--parallel", "6", "--port", "42161"]
 	}]
 }]
 ```

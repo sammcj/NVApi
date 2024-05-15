@@ -4,7 +4,7 @@ FROM nvcr.io/nvidia/cuda:12.4.1-devel-ubuntu22.04 as builder
 LABEL org.opencontainers.image.description "NVApi is a lightweight API that exposes NVIDIA GPU metrics"
 
 # install go
-RUN apt update && apt install -y golang git
+RUN apt update && apt install -y golang git procps
 
 WORKDIR /app
 

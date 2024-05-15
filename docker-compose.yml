@@ -1,0 +1,22 @@
+services:
+  &name nvapi:
+    build:
+      context: https://github.com/sammcj/nvapi.git#main
+      dockerfile: Dockerfile
+    container_name: *name
+    hostname: *name
+    pid: host # so we can lookup process names
+    ports:
+      - 9999:9999
+    # command: ["/app/nvapi", "-port", "9999", "-debug"]
+    security_opt:
+      - no-new-privileges=true
+    restart: unless-stopped
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: ["compute", "utility", "graphics"]
