@@ -141,10 +141,14 @@ func GetGPUInfo() ([]GPUInfo, error) {
 				Arguments: arguments,
 			}
 
-			fmt.Println("Process: ", processName)
+			if debug != nil && *debug {
+				fmt.Println("Process: ", processName)
+			}
 		}
 
-		fmt.Println("Processes: ", processesInfo)
+		if debug != nil && *debug {
+			fmt.Println("Processes: ", processesInfo)
+		}
 
 		memoryTotal := float64(memory.Total) / 1024 / 1024 / 1024
 		memoryUsed := float64(memory.Used) / 1024 / 1024 / 1024
@@ -161,7 +165,7 @@ func GetGPUInfo() ([]GPUInfo, error) {
 			MemoryUsage:   memoryUsage,
 			Temperature:   uint(temperature),
 			FanSpeed:      uint(fanSpeed),
-			Processes:		 processesInfo[:],
+			Processes:		 processesInfo,
 		}
 
 		gpuInfos[i] = gpuInfo
