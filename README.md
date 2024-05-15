@@ -77,24 +77,25 @@ curl http://localhost:9999/gpu
 ```
 
 ```json
-{
-	"gpu_utilisation": 50,
-	"memory_utilisation": 30,
-	"power_watts": 200,
-	"memory_total_gb": 12.0,
-	"memory_used_gb": 4.0,
-	"memory_free_gb": 8.0,
-	"memory_usage": "33%",
-	"temperature": 50,
-	"fan_speed": 30,
+[{
+	"gpu_utilisation": 0,
+	"memory_utilisation": 0,
+	"power_watts": 22,
+	"memory_total_gb": 24,
+	"memory_used_gb": 9.77,
+	"memory_free_gb": 14.23,
+	"memory_usage": "41",
+	"temperature": 34,
+	"fan_speed": 0,
 	"processes": [{
 		"Pid": 2238874,
-		"UsedGpuMemory": 10148118528,
-		"GpuInstanceId": 4294967295,
-		"ComputeInstanceId": 4294967295,
-		"Name": "/tmp/ollama630272566/runners/cuda_v12/ollama_llama_server --model /home/llm/.ollama/models/blobs/sha256-583c616da14b82930f887f991ab446711da0b029166200b67892d7c9f8f45958 --ctx-size 12288 --batch-size 5"
+		"UsedGpuMemoryMb": 9678,
+		"GpuInstanceId": 0,
+		"ComputeInstanceId": 0,
+		"Name": "/tmp/ollama630272566/runners/cuda_v12/ollama_llama_server",
+		"Arguments": ["--model", "/home/llm/.ollama/models/blobs/sha256-583c616da14b82930f887f991ab446711da0b029166200b67892d7c9f8f45958", "--ctx-size", "12288", "--batch-size", "512", "--embedding", "--log-disable", "--n-gpu-layers", "33", "--flash-attn", "--parallel", "6", "--port", "39069"]
 	}]
-}
+}]
 ```
 
 ### `/svg`
