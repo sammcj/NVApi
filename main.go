@@ -141,6 +141,11 @@ func GetGPUInfo() ([]GPUInfo, error) {
 				Arguments: arguments,
 			}
 
+			// make sure we still return a valid object for the json response
+			if len(processName) == 0 {
+				processName = "Unknown"
+			}
+
 			if debug != nil && *debug {
 				fmt.Println("Process: ", processName)
 			}
@@ -155,6 +160,17 @@ func GetGPUInfo() ([]GPUInfo, error) {
 		memoryFree := float64(memory.Free) / 1024 / 1024 / 1024
 		memoryUsage := fmt.Sprintf("%d", int(math.Round((float64(memory.Used)/float64(memory.Total))*100)))
 
+		// make sure processesInfo always returns a valid object for the json response
+		if len(processesInfo) == 0 {
+			processesInfo = []ProcessInfo{
+				{
+					Pid: 0,
+					UsedGpuMemoryMb: 0,
+					Name: "None",
+				},
+			}
+		}
+
 		gpuInfo := GPUInfo{
 			GPUUtilisation:  uint(usage.Gpu),
 			MemoryUtilisation: uint(usage.Memory),
@@ -165,7 +181,7 @@ func GetGPUInfo() ([]GPUInfo, error) {
 			MemoryUsage:   memoryUsage,
 			Temperature:   uint(temperature),
 			FanSpeed:      uint(fanSpeed),
-			Processes:		 processesInfo,
+			Processes:	 processesInfo,
 		}
 
 		gpuInfos[i] = gpuInfo
@@ -357,7 +373,20 @@ func main() {
 			lastGPUInfos[i] = &gpuInfo
 		}
 
-		json.NewEncoder(w).Encode(gpuInfos)
+		// first encode the GPU info as valid json, validate the json, then write it to the response
+		jsonResponse, err := json.Marshal(lastGPUInfos)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(jsonResponse)
+
+		// if debug is enabled, print the GPU info
+		if debug != nil && *debug {
+			fmt.Println("GPU Info: ", gpuInfos)
+		}
 	})
 
 	http.HandleFunc("/gpu", func(w http.ResponseWriter, r *http.Request) {
