@@ -157,6 +157,19 @@ sensors:
   value_template: '{{ value_json[0].power_watts }}'
 ```
 
+## NVApi-Tray GUI
+
+A simple GUI application that displays the GPU utilisation information from the API.
+
+![](screenshots/NVApiGUI.png)
+
+This is a work in progress but can be built from the `NVApi-GUI` directory.
+
+```shell
+cd NVApi-GUI
+go build
+```
+
 ## License
 
 Copyright 2024 Sam McLeod

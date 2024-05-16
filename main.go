@@ -322,6 +322,8 @@ func main() {
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		// if /gpu is requested, return the full GPU info
 
+		w.Header().Set("Content-Type", "application/json")
+
 		// if the rate limiter does not allow, return the last GPU info
 		if !rl.takeToken() {
 			if lastGPUInfos != nil {
@@ -352,7 +354,6 @@ func main() {
 			return
 		}
 
-		w.Header().Set("Content-Type", "application/json")
 		w.Write(jsonResponse)
 
 		// if debug is enabled, print the GPU info
