@@ -22,7 +22,7 @@ Or using docker-compose see [docker-compose.yml](docker-compose.yml) for an exam
 
 To run the API, use the following command:
 
-```
+```shell
 go run main.go -port 9999 -rate 1
 ```
 
@@ -30,13 +30,11 @@ This will start the API on port 9999 with a rate limit of 1 request per second.
 
 ## API Endpoints
 
-
 ### `/`
 
 Returns the current GPU utilisation information in JSON format.
 
 ## Query Parameters
-
 
 * `port`: The port number to listen on (default: 9999)
 * `rate`: The minimum number of seconds between requests (default: 3)
@@ -49,21 +47,21 @@ curl http://localhost:9999/gpu
 
 ```json
 [{
-	"gpu_utilisation": 0,
-	"memory_utilisation": 0,
-	"power_watts": 23,
-	"memory_total_gb": 24,
-	"memory_used_gb": 9.77,
-	"memory_free_gb": 14.23,
-	"memory_usage_percent": 41,
-	"temperature": 35,
-	"fan_speed": 0,
-	"processes": [{
-		"Pid": 2345831,
-		"UsedGpuMemoryMb": 9678,
-		"Name": "/tmp/ollama630272566/runners/cuda_v12/ollama_llama_server",
-		"Arguments": ["--model", "/home/llm/.ollama/models/blobs/sha256-583c616da14b82930f887f991ab446711da0b029166200b67892d7c9f8f45958", "--ctx-size", "12288", "--batch-size", "512", "--embedding", "--log-disable", "--n-gpu-layers", "33", "--flash-attn", "--parallel", "6", "--port", "42161"]
-	}]
+ "gpu_utilisation": 0,
+ "memory_utilisation": 0,
+ "power_watts": 23,
+ "memory_total_gb": 24,
+ "memory_used_gb": 9.77,
+ "memory_free_gb": 14.23,
+ "memory_usage_percent": 41,
+ "temperature": 35,
+ "fan_speed": 0,
+ "processes": [{
+  "Pid": 2345831,
+  "UsedGpuMemoryMb": 9678,
+  "Name": "/tmp/ollama630272566/runners/cuda_v12/ollama_llama_server",
+  "Arguments": ["--model", "/home/llm/.ollama/models/blobs/sha256-583c616da14b82930f887f991ab446711da0b029166200b67892d7c9f8f45958", "--ctx-size", "12288", "--batch-size", "512", "--embedding", "--log-disable", "--n-gpu-layers", "33", "--flash-attn", "--parallel", "6", "--port", "42161"]
+ }]
 }]
 ```
 
