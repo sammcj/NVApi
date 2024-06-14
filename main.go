@@ -16,7 +16,7 @@ import (
 	"github.com/NVIDIA/go-nvml/pkg/nvml"
 )
 
-const version = "1.0.2"
+const version = "1.1.0"
 
 type GPUInfo struct {
 	GPUUtilisation     uint          `json:"gpu_utilisation"`
@@ -29,6 +29,9 @@ type GPUInfo struct {
 	Temperature        uint          `json:"temperature"`
 	FanSpeed           uint          `json:"fan_speed"`
 	Processes          []ProcessInfo `json:"processes"`
+	Name               string        `json:"name"`
+	Index              uint          `json:"index"`
+	PowerLimitWatts    uint          `json:"power_limit_watts"`
 }
 
 type rateLimiter struct {
@@ -37,6 +40,7 @@ type rateLimiter struct {
 	rate     float64
 	mu       sync.Mutex
 	lastTime time.Time
+	cache    *[]GPUInfo // Add a cache variable to store cached GPUInfo data
 }
 
 type ProcessInfo struct {
@@ -60,6 +64,11 @@ func (rl *rateLimiter) takeToken() bool {
 	}
 	rl.tokens--
 	return true
+}
+
+func (rl *rateLimiter) getCache() []GPUInfo {
+	// Return the cached response or a default value if no cache exists
+	return *(rl.cache)
 }
 
 func getProcessInfo(pid uint32) (string, []string, error) {
@@ -97,6 +106,21 @@ func GetGPUInfo() ([]GPUInfo, error) {
 		device, ret := nvml.DeviceGetHandleByIndex(i)
 		if ret != nvml.SUCCESS {
 			return nil, fmt.Errorf("unable to get device at index %d: %v", i, nvml.ErrorString(ret))
+		}
+
+		index, ret := device.GetIndex()
+		if ret != nvml.SUCCESS {
+			return nil, fmt.Errorf("unable to get device index: %v", nvml.ErrorString(ret))
+		}
+
+		name, ret := device.GetName()
+		if ret != nvml.SUCCESS {
+			return nil, fmt.Errorf("unable to get device name: %v", nvml.ErrorString(ret))
+		}
+
+		PowerLimitWatts, ret := device.GetPowerManagementLimit()
+		if ret != nvml.SUCCESS {
+			return nil, fmt.Errorf("unable to get power management limit: %v", nvml.ErrorString(ret))
 		}
 
 		usage, ret := device.GetUtilizationRates()
@@ -149,6 +173,8 @@ func GetGPUInfo() ([]GPUInfo, error) {
 		memoryUsagePercent := int(math.Round((float64(memory.Used) / float64(memory.Total)) * 100))
 
 		gpuInfo := GPUInfo{
+			Index:              uint(index),
+			Name:               name,
 			GPUUtilisation:     uint(usage.Gpu),
 			MemoryUtilisation:  uint(usage.Memory),
 			PowerWatts:         uint(math.Round(float64(power) / 1000)),
@@ -159,6 +185,7 @@ func GetGPUInfo() ([]GPUInfo, error) {
 			Temperature:        uint(temperature),
 			FanSpeed:           uint(fanSpeed),
 			Processes:          processesInfo,
+			PowerLimitWatts:    uint(math.Round(float64(PowerLimitWatts) / 1000)),
 		}
 
 		gpuInfos[i] = gpuInfo
@@ -167,58 +194,11 @@ func GetGPUInfo() ([]GPUInfo, error) {
 	return gpuInfos, nil
 }
 
-func generateComputeSVG(gpuInfo GPUInfo) string {
-	width := 200
-	height := 20
-
-	gpuUtilisation := gpuInfo.GPUUtilisation
-
-	svg := fmt.Sprintf(`
-				<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d">
-            <rect x="0" y="0" width="%d" height="%d" fill="#CCCCCC" rx="5" />
-            <rect x="0" y="0" width="%d" height="%d" fill="#00FF00" rx="5" />
-            <rect x="%d" y="0" width="%d" height="%d" fill="#FFFF00" rx="5" />
-            <text x="5" y="15" font-family="Arial" font-size="10" fill="black">GPU: %d%%</text>
-        </svg>`,
-		width, height,
-		width, height,
-		int(float64(width)*float64(gpuUtilisation)/100), height,
-		width+int(float64(width)*float64(gpuUtilisation)/100),
-		int(float64(width)*float64(gpuUtilisation)/100), height,
-		gpuUtilisation)
-
-	return svg
-}
-
-func generateMemSVG(gpuInfo GPUInfo) string {
-	width := 200
-	height := 20
-
-	memoryUtilisation := gpuInfo.MemoryUtilisation
-
-	svg := fmt.Sprintf(`
-				<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d">
-						<rect x="0" y="0" width="%d" height="%d" fill="#CCCCCC" rx="5" />
-						<rect x="0" y="0" width="%d" height="%d" fill="#00FF00" rx="5" />
-						<rect x="%d" y="0" width="%d" height="%d" fill="#FFFF00" rx="5" />
-						<text x="5" y="15" font-family="Arial" font-size="10" fill="black">Memory: %d%%</text>
-				</svg>`,
-		width, height,
-		width, height,
-		int(float64(width)*float64(memoryUtilisation)/100), height,
-		width+int(float64(width)*float64(memoryUtilisation)/100),
-		int(float64(width)*float64(memoryUtilisation)/100), height,
-		memoryUtilisation)
-
-	return svg
-}
-
 var (
-	port         = flag.Int("port", 9999, "Port to listen on")
-	rate         = flag.Int("rate", 3, "Minimum number of seconds between requests")
-	debug        = flag.Bool("debug", false, "Print debug logs to the console")
-	help         = flag.Bool("help", false, "Print this help")
-	lastGPUInfos []*GPUInfo
+	port  = flag.Int("port", 9999, "Port to listen on")
+	rate  = flag.Int("rate", 3, "Minimum number of seconds between requests")
+	debug = flag.Bool("debug", false, "Print debug logs to the console")
+	help  = flag.Bool("help", false, "Print this help")
 )
 
 func main() {
@@ -237,11 +217,13 @@ func main() {
 		return
 	}
 
-	if err := nvml.Init(); err != nvml.SUCCESS {
-		log.Fatalf("unable to initialise NVML: %v", nvml.ErrorString(err))
+	ret := nvml.Init()
+	if ret != nvml.SUCCESS {
+		log.Fatalf("unable to initialise NVML: %v", nvml.ErrorString(ret))
 	}
 
-	if count, err := nvml.DeviceGetCount(); err != nvml.SUCCESS || count == 0 {
+	count, err := nvml.DeviceGetCount()
+	if err != nvml.SUCCESS || count == 0 {
 		log.Fatalf("no devices found")
 	}
 
@@ -251,90 +233,19 @@ func main() {
 	}
 
 	rl := &rateLimiter{
-		capacity: 1,
-		rate:     1 / float64(*rate),
+		capacity: float64(1),            // Use explicit conversion to avoid errors with integer division
+		rate:     float64(*rate) / 3600, // Convert rate from seconds to hours for better readability
+		cache:    new([]GPUInfo),        // Initialize cache as a pointer to slice of GPUInfo structs
 	}
 
-	http.HandleFunc("/svg/compute", func(w http.ResponseWriter, r *http.Request) {
-		if !rl.takeToken() {
-			if lastGPUInfos != nil {
-				w.Header().Set("Content-Type", "image/svg+xml; charset=utf-8")
-				for _, gpuInfo := range lastGPUInfos {
-					svg := generateComputeSVG(*gpuInfo)
-					fmt.Fprint(w, svg)
-				}
-			} else {
-				http.Error(w, "No data available", http.StatusNoContent)
-			}
-			return
-		}
-
-		gpuInfos, err := GetGPUInfo()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		lastGPUInfos = make([]*GPUInfo, len(gpuInfos))
-		for i, gpuInfo := range gpuInfos {
-			lastGPUInfos[i] = &gpuInfo
-		}
-
-		w.Header().Set("Content-Type", "image/svg+xml; charset=utf-8")
-		for _, gpuInfo := range lastGPUInfos {
-			svg := generateComputeSVG(*gpuInfo)
-			fmt.Fprint(w, svg)
-		}
-	})
-
-	http.HandleFunc("/svg/mem", func(w http.ResponseWriter, r *http.Request) {
-		if !rl.takeToken() {
-			if lastGPUInfos != nil {
-				w.Header().Set("Content-Type", "image/svg+xml; charset=utf-8")
-				for _, gpuInfo := range lastGPUInfos {
-					svg := generateMemSVG(*gpuInfo)
-					fmt.Fprint(w, svg)
-				}
-			} else {
-				http.Error(w, "No data available", http.StatusNoContent)
-			}
-			return
-		}
-
-		gpuInfos, err := GetGPUInfo()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		lastGPUInfos = make([]*GPUInfo, len(gpuInfos))
-		for i, gpuInfo := range gpuInfos {
-			lastGPUInfos[i] = &gpuInfo
-		}
-
-		w.Header().Set("Content-Type", "image/svg+xml; charset=utf-8")
-		for _, gpuInfo := range lastGPUInfos {
-			svg := generateMemSVG(*gpuInfo)
-			fmt.Fprint(w, svg)
-		}
-	})
-
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// if /gpu is requested, return the full GPU info
+		w.Header().Set("Content-Type", "application/json") // Set Content-Type header for JSON response
 
-		w.Header().Set("Content-Type", "application/json")
-
-		// if the rate limiter does not allow, return the last GPU info
 		if !rl.takeToken() {
-			if lastGPUInfos != nil {
-				json.NewEncoder(w).Encode(lastGPUInfos)
-			} else {
-				http.Error(w, "No data available", http.StatusNoContent)
-			}
+			// Rate limit exceeded, return the cached response or default value
+			json.NewEncoder(w).Encode(rl.getCache())
 			return
 		}
-
-		// if the rate limiter allows, get the GPU info
 
 		gpuInfos, err := GetGPUInfo()
 		if err != nil {
@@ -342,28 +253,18 @@ func main() {
 			return
 		}
 
-		lastGPUInfos = make([]*GPUInfo, len(gpuInfos))
-		for i, gpuInfo := range gpuInfos {
-			lastGPUInfos[i] = &gpuInfo
-		}
+		*rl.cache = gpuInfos // Assign the returned GPUInfo slice to cache
+		json.NewEncoder(w).Encode(gpuInfos)
 
-		// first encode the GPU info as valid json, validate the json, then write it to the response
-		jsonResponse, err := json.Marshal(lastGPUInfos)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		w.Write(jsonResponse)
-
-		// if debug is enabled, print the GPU info
 		if *debug {
 			fmt.Println("GPU Info: ", gpuInfos)
 		}
 	})
 
 	http.HandleFunc("/gpu", func(w http.ResponseWriter, r *http.Request) {
-		pathToField := map[string]func(gpuInfo *GPUInfo) interface{}{
+		w.Header().Set("Content-Type", "application/json") // Set Content-Type header for JSON response
+
+		pathToField := map[string]func(*GPUInfo) interface{}{
 			"/gpu/gpu_utilisation":      func(gpuInfo *GPUInfo) interface{} { return gpuInfo.GPUUtilisation },
 			"/gpu/memory_utilisation":   func(gpuInfo *GPUInfo) interface{} { return gpuInfo.MemoryUtilisation },
 			"/gpu/power_watts":          func(gpuInfo *GPUInfo) interface{} { return gpuInfo.PowerWatts },
@@ -388,24 +289,8 @@ func main() {
 		}
 
 		if !rl.takeToken() {
-			if lastGPUInfos != nil {
-				for _, gpuInfo := range lastGPUInfos {
-					path := r.URL.Path
-					if f, ok := pathToField[path]; ok {
-						json.NewEncoder(w).Encode(f(gpuInfo))
-						if *debug {
-							fmt.Println("Field: ", f(gpuInfo))
-						}
-					} else {
-						json.NewEncoder(w).Encode(gpuInfo)
-						if *debug {
-							fmt.Println("GPU Info: ", gpuInfo)
-						}
-					}
-				}
-			} else {
-				http.Error(w, "No data available", http.StatusNoContent)
-			}
+			// Rate limit exceeded, return the cached response or default value
+			json.NewEncoder(w).Encode(rl.getCache())
 			return
 		}
 
@@ -415,6 +300,8 @@ func main() {
 			return
 		}
 
+		*rl.cache = gpuInfos // Assign the returned GPUInfo slice to cache
+
 		for _, gpuInfo := range gpuInfos {
 			path := r.URL.Path
 			if f, ok := pathToField[path]; ok {
@@ -423,10 +310,6 @@ func main() {
 				json.NewEncoder(w).Encode(gpuInfo)
 			}
 		}
-	})
-
-	http.HandleFunc("/svg", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/svg/mem", http.StatusSeeOther)
 	})
 
 	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", *port), nil))

@@ -47,27 +47,45 @@ curl http://localhost:9999/gpu
 
 ```json
 [{
- "gpu_utilisation": 0,
- "memory_utilisation": 0,
- "power_watts": 23,
- "memory_total_gb": 24,
- "memory_used_gb": 9.77,
- "memory_free_gb": 14.23,
- "memory_usage_percent": 41,
- "temperature": 35,
- "fan_speed": 0,
- "processes": [{
-  "Pid": 2345831,
-  "UsedGpuMemoryMb": 9678,
-  "Name": "/tmp/ollama630272566/runners/cuda_v12/ollama_llama_server",
-  "Arguments": ["--model", "/home/llm/.ollama/models/blobs/sha256-583c616da14b82930f887f991ab446711da0b029166200b67892d7c9f8f45958", "--ctx-size", "12288", "--batch-size", "512", "--embedding", "--log-disable", "--n-gpu-layers", "33", "--flash-attn", "--parallel", "6", "--port", "42161"]
- }]
+  "gpu_utilisation": 0,
+  "memory_utilisation": 0,
+  "power_watts": 22,
+  "memory_total_gb": 24,
+  "memory_used_gb": 22.44,
+  "memory_free_gb": 1.56,
+  "memory_usage_percent": 94,
+  "temperature": 38,
+  "fan_speed": 0,
+  "processes": [{
+    "Pid": 2409765,
+    "UsedGpuMemoryMb": 22650,
+    "Name": "cuda_v12/ollama_llama_server",
+    "Arguments": ["--model", "/models/mixtral", "--ctx-size", "2048", "--batch-size", "512", "--embedding", "--log-disable", "--n-gpu-layers", "26", "--flash-attn", "--parallel", "1", "--port", "39467"]
+  }],
+  "name": "NVIDIA GeForce RTX 3090",
+  "index": 0,
+  "power_limit_watts": 360
+}, {
+  "gpu_utilisation": 0,
+  "memory_utilisation": 0,
+  "power_watts": 14,
+  "memory_total_gb": 15.99,
+  "memory_used_gb": 13.88,
+  "memory_free_gb": 2.11,
+  "memory_usage_percent": 87,
+  "temperature": 35,
+  "fan_speed": 41,
+  "processes": [{
+    "Pid": 2409765,
+    "UsedGpuMemoryMb": 13934,
+    "Name": "cuda_v12/ollama_llama_server",
+    "Arguments": ["--model", "/models/mixtral", "--ctx-size", "2048", "--batch-size", "512", "--embedding", "--log-disable", "--n-gpu-layers", "26", "--flash-attn", "--parallel", "1", "--port", "39467"]
+  }],
+  "name": "NVIDIA RTX A4000",
+  "index": 1,
+  "power_limit_watts": 140
 }]
 ```
-
-### `/svg`
-
-Returns a (very) basic SVG image showing the current GPU utilisation as a bar.
 
 ### Home Assistant Integration
 
@@ -85,11 +103,14 @@ sensors:
   unique_id: gpu_0
   scan_interval: 30
   json_attributes:
+    - name
+    - index
     - gpu_utilisation
     - memory_utilisation
     - memory_used_gb
     - memory_free_gb
     - power_watts
+    - power_limit_watts
     - temperature
     - fan_speed
   value_template: '{{ value_json[0].gpu_utilisation }}'
