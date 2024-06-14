@@ -275,10 +275,10 @@ func main() {
 			"/gpu/memory_usage_percent": func(gpuInfo *GPUInfo) interface{} { return gpuInfo.MemoryUsagePercent },
 			"/gpu/temperature":          func(gpuInfo *GPUInfo) interface{} { return gpuInfo.Temperature },
 			"/gpu/fan_speed":            func(gpuInfo *GPUInfo) interface{} { return gpuInfo.FanSpeed },
-			"/gpu/processes":            func(gpuInfo *GPUInfo) interface{} { return gpuInfo.Processes },
-			"/gpu/index":                func(gpuInfo *GPUInfo) interface{} { return gpuInfo.Index },
 			"/gpu/name":                 func(gpuInfo *GPUInfo) interface{} { return gpuInfo.Name },
+			"/gpu/index":                func(gpuInfo *GPUInfo) interface{} { return gpuInfo.Index },
 			"/gpu/all":                  func(gpuInfo *GPUInfo) interface{} { return gpuInfo },
+			"/gpu/processes":            func(gpuInfo *GPUInfo) interface{} { return gpuInfo.Processes },
 		}
 
 		// if debug is enabled, print the path
