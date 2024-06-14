@@ -19,9 +19,12 @@ import (
 const version = "1.1.0"
 
 type GPUInfo struct {
+	Name               string        `json:"name"`
+	Index              uint          `json:"index"`
 	GPUUtilisation     uint          `json:"gpu_utilisation"`
 	MemoryUtilisation  uint          `json:"memory_utilisation"`
 	PowerWatts         uint          `json:"power_watts"`
+	PowerLimitWatts    uint          `json:"power_limit_watts"`
 	MemoryTotal        float64       `json:"memory_total_gb"`
 	MemoryUsed         float64       `json:"memory_used_gb"`
 	MemoryFree         float64       `json:"memory_free_gb"`
@@ -29,9 +32,6 @@ type GPUInfo struct {
 	Temperature        uint          `json:"temperature"`
 	FanSpeed           uint          `json:"fan_speed"`
 	Processes          []ProcessInfo `json:"processes"`
-	Name               string        `json:"name"`
-	Index              uint          `json:"index"`
-	PowerLimitWatts    uint          `json:"power_limit_watts"`
 }
 
 type rateLimiter struct {
@@ -177,15 +177,15 @@ func GetGPUInfo() ([]GPUInfo, error) {
 			Name:               name,
 			GPUUtilisation:     uint(usage.Gpu),
 			MemoryUtilisation:  uint(usage.Memory),
-			PowerWatts:         uint(math.Round(float64(power) / 1000)),
 			MemoryTotal:        math.Round(memoryTotal*100) / 100,
 			MemoryUsed:         math.Round(memoryUsed*100) / 100,
 			MemoryFree:         math.Round(memoryFree*100) / 100,
 			MemoryUsagePercent: memoryUsagePercent,
 			Temperature:        uint(temperature),
 			FanSpeed:           uint(fanSpeed),
-			Processes:          processesInfo,
+			PowerWatts:         uint(math.Round(float64(power) / 1000)),
 			PowerLimitWatts:    uint(math.Round(float64(PowerLimitWatts) / 1000)),
+			Processes:          processesInfo,
 		}
 
 		gpuInfos[i] = gpuInfo
@@ -268,6 +268,7 @@ func main() {
 			"/gpu/gpu_utilisation":      func(gpuInfo *GPUInfo) interface{} { return gpuInfo.GPUUtilisation },
 			"/gpu/memory_utilisation":   func(gpuInfo *GPUInfo) interface{} { return gpuInfo.MemoryUtilisation },
 			"/gpu/power_watts":          func(gpuInfo *GPUInfo) interface{} { return gpuInfo.PowerWatts },
+			"/gpu/power_limit_watts":    func(gpuInfo *GPUInfo) interface{} { return gpuInfo.PowerLimitWatts },
 			"/gpu/memory_total_gb":      func(gpuInfo *GPUInfo) interface{} { return gpuInfo.MemoryTotal },
 			"/gpu/memory_used_gb":       func(gpuInfo *GPUInfo) interface{} { return gpuInfo.MemoryUsed },
 			"/gpu/memory_free_gb":       func(gpuInfo *GPUInfo) interface{} { return gpuInfo.MemoryFree },
@@ -275,6 +276,8 @@ func main() {
 			"/gpu/temperature":          func(gpuInfo *GPUInfo) interface{} { return gpuInfo.Temperature },
 			"/gpu/fan_speed":            func(gpuInfo *GPUInfo) interface{} { return gpuInfo.FanSpeed },
 			"/gpu/processes":            func(gpuInfo *GPUInfo) interface{} { return gpuInfo.Processes },
+			"/gpu/index":                func(gpuInfo *GPUInfo) interface{} { return gpuInfo.Index },
+			"/gpu/name":                 func(gpuInfo *GPUInfo) interface{} { return gpuInfo.Name },
 			"/gpu/all":                  func(gpuInfo *GPUInfo) interface{} { return gpuInfo },
 		}
 
