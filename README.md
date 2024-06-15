@@ -47,6 +47,8 @@ curl http://localhost:9999/gpu
 
 ```json
 [{
+  "index": 0,
+  "name": "NVIDIA GeForce RTX 3090",
   "gpu_utilisation": 0,
   "memory_utilisation": 0,
   "power_watts": 22,
@@ -56,16 +58,16 @@ curl http://localhost:9999/gpu
   "memory_usage_percent": 94,
   "temperature": 38,
   "fan_speed": 0,
+  "power_limit_watts": 360,
   "processes": [{
     "Pid": 2409765,
     "UsedGpuMemoryMb": 22650,
     "Name": "cuda_v12/ollama_llama_server",
     "Arguments": ["--model", "/models/mixtral", "--ctx-size", "2048", "--batch-size", "512", "--embedding", "--log-disable", "--n-gpu-layers", "26", "--flash-attn", "--parallel", "1", "--port", "39467"]
-  }],
-  "name": "NVIDIA GeForce RTX 3090",
-  "index": 0,
-  "power_limit_watts": 360
+  }]
 }, {
+  "index": 1,
+  "name": "NVIDIA RTX A4000",
   "gpu_utilisation": 0,
   "memory_utilisation": 0,
   "power_watts": 14,
@@ -75,15 +77,13 @@ curl http://localhost:9999/gpu
   "memory_usage_percent": 87,
   "temperature": 35,
   "fan_speed": 41,
+  "power_limit_watts": 140,
   "processes": [{
     "Pid": 2409765,
     "UsedGpuMemoryMb": 13934,
     "Name": "cuda_v12/ollama_llama_server",
     "Arguments": ["--model", "/models/mixtral", "--ctx-size", "2048", "--batch-size", "512", "--embedding", "--log-disable", "--n-gpu-layers", "26", "--flash-attn", "--parallel", "1", "--port", "39467"]
   }],
-  "name": "NVIDIA RTX A4000",
-  "index": 1,
-  "power_limit_watts": 140
 }]
 ```
 
@@ -97,11 +97,12 @@ Example of using the API to integrate with Home Assistant:
 sensors:
 
 - platform: rest
-  name: "GPU Utilisation"
+  name: "NAS GPU Utilisation - RTX3090"
   resource: http://localhost:9999
   unit_of_measurement: "%"
   unique_id: gpu_0
   scan_interval: 30
+  json_attributes_path: '$.0'
   json_attributes:
     - name
     - index
@@ -113,67 +114,29 @@ sensors:
     - power_limit_watts
     - temperature
     - fan_speed
-  value_template: '{{ value_json[0].gpu_utilisation }}'
-
-- platform: rest
-  name: "GPU Memory Utilisation"
-  resource: http://localhost:9999
-  unit_of_measurement: "%"
-  unique_id: gpu_0_memory_utilisation
-  scan_interval: 30
-  json_attributes:
-    - memory_utilisation
+    - processes
   value_template: '{{ value_json[0].memory_utilisation }}'
 
 - platform: rest
-  name: "GPU Memory Used"
+  name: "NAS GPU Utilisation - RTX A4000"
   resource: http://localhost:9999
-  unit_of_measurement: "GB"
-  unique_id: gpu_0_memory_used_gb
+  unit_of_measurement: "%"
+  unique_id: gpu_1
   scan_interval: 30
+  json_attributes_path: '$.1'
   json_attributes:
+    - name
+    - index
+    - gpu_utilisation
+    - memory_utilisation
     - memory_used_gb
-  value_template: '{{ value_json[0].memory_used_gb }}'
-
-- platform: rest
-  name: "GPU Memory Free"
-  resource: http://localhost:9999
-  unit_of_measurement: "GB"
-  unique_id: gpu_0_memory_free_gb
-  scan_interval: 30
-  json_attributes:
     - memory_free_gb
-  value_template: '{{ value_json[0].memory_free_gb }}'
-
-- platform: rest
-  name: "GPU Temperature"
-  resource: http://localhost:9999
-  unit_of_measurement: "°C"
-  unique_id: gpu_0_temperature
-  scan_interval: 30
-  json_attributes:
-    - temperature
-  value_template: '{{ value_json[0].temperature }}'
-
-- platform: rest
-  name: "GPU Fan Speed"
-  resource: http://localhost:9999
-  unit_of_measurement: "RPM"
-  unique_id: gpu_0_fan_speed
-  scan_interval: 30
-  json_attributes:
-    - fan_speed
-  value_template: '{{ value_json[0].fan_speed }}'
-
-- platform: rest
-  name: "GPU Power"
-  resource: http://localhost:9999
-  unit_of_measurement: "W"
-  unique_id: gpu_0_power
-  scan_interval: 30
-  json_attributes:
     - power_watts
-  value_template: '{{ value_json[0].power_watts }}'
+    - power_limit_watts
+    - temperature
+    - fan_speed
+    - processes
+  value_template: '{{ value_json[1].memory_utilisation }}'
 ```
 
 ## NVApi-Tray GUI

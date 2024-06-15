@@ -19,8 +19,8 @@ import (
 const version = "1.1.0"
 
 type GPUInfo struct {
-	Name               string        `json:"name"`
 	Index              uint          `json:"index"`
+	Name               string        `json:"name"`
 	GPUUtilisation     uint          `json:"gpu_utilisation"`
 	MemoryUtilisation  uint          `json:"memory_utilisation"`
 	PowerWatts         uint          `json:"power_watts"`
@@ -265,6 +265,8 @@ func main() {
 		w.Header().Set("Content-Type", "application/json") // Set Content-Type header for JSON response
 
 		pathToField := map[string]func(*GPUInfo) interface{}{
+			"/gpu/index":                func(gpuInfo *GPUInfo) interface{} { return gpuInfo.Index },
+			"/gpu/name":                 func(gpuInfo *GPUInfo) interface{} { return gpuInfo.Name },
 			"/gpu/gpu_utilisation":      func(gpuInfo *GPUInfo) interface{} { return gpuInfo.GPUUtilisation },
 			"/gpu/memory_utilisation":   func(gpuInfo *GPUInfo) interface{} { return gpuInfo.MemoryUtilisation },
 			"/gpu/power_watts":          func(gpuInfo *GPUInfo) interface{} { return gpuInfo.PowerWatts },
@@ -275,8 +277,6 @@ func main() {
 			"/gpu/memory_usage_percent": func(gpuInfo *GPUInfo) interface{} { return gpuInfo.MemoryUsagePercent },
 			"/gpu/temperature":          func(gpuInfo *GPUInfo) interface{} { return gpuInfo.Temperature },
 			"/gpu/fan_speed":            func(gpuInfo *GPUInfo) interface{} { return gpuInfo.FanSpeed },
-			"/gpu/name":                 func(gpuInfo *GPUInfo) interface{} { return gpuInfo.Name },
-			"/gpu/index":                func(gpuInfo *GPUInfo) interface{} { return gpuInfo.Index },
 			"/gpu/all":                  func(gpuInfo *GPUInfo) interface{} { return gpuInfo },
 			"/gpu/processes":            func(gpuInfo *GPUInfo) interface{} { return gpuInfo.Processes },
 		}
