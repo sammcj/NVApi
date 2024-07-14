@@ -4,6 +4,8 @@ A lightweight API that returns Nvidia GPU utilisation information.
 
 ![](screenshots/json_response.png)
 
+![](screenshots/home-assistant-integration-2.png)
+
 ## Usage
 
 ### Docker Container
@@ -89,8 +91,6 @@ curl http://localhost:9999/gpu
 
 ### Home Assistant Integration
 
-![](screenshots/home-assistant-integration-2.png)
-
 Example of using the API to integrate with Home Assistant:
 
 ```yaml
@@ -137,6 +137,223 @@ sensors:
     - fan_speed
     - processes
   value_template: '{{ value_json[1].memory_utilisation }}'
+```
+
+And you might integrate this into a dashboard (as pictured above) like so:
+
+```yaml
+title: GPUs
+path: gpus
+icon: mdi:expansion-card
+type: sections
+max_columns: 3
+sections:
+  - type: grid
+    cards:
+      - type: custom:layout-card
+        layout_type: masonry
+        layout: {}
+        cards:
+          - type: gauge
+            entity: sensor.nas_gpu_power_rtx3090
+            unit: W
+            name: RTX3090 Power
+            min: 20
+            max: 390
+            severity:
+              green: 30
+              yellow: 350
+              red: 380
+            needle: true
+          - type: gauge
+            entity: sensor.nas_gpu_temperature_rtx3090
+            max: 92
+            severity:
+              green: 60
+              yellow: 80
+              red: 90
+            needle: true
+            min: 0
+            unit: ℃
+          - type: grid
+            columns: 2
+            cards:
+              - type: gauge
+                entity: sensor.nas_gpu_utilisation_rtx3090
+                max: 100
+                severity:
+                  green: 80
+                  yellow: 90
+                  red: 95
+                needle: true
+                min: 0
+                unit: "%"
+              - type: gauge
+                entity: sensor.nas_gpu_memory_used_rtx3090
+                unit: GB
+                max: 24
+                severity:
+                  green: 20
+                  yellow: 22
+                  red: 23.9
+                needle: true
+                min: 0
+      - type: custom:apexcharts-card
+        header:
+          show: true
+          title: RTX 3090
+          show_states: true
+          colorize_states: true
+        apex_config:
+          chart:
+            height: 300px
+            update_interval: 2m
+        graph_span: 12h
+        series:
+          - entity: sensor.nas_gpu_utilisation_rtx3090
+            stroke_width: 2
+          - entity: sensor.nas_gpu_temperature_rtx3090
+            stroke_width: 3
+          - entity: sensor.nas_gpu_power_rtx3090
+            stroke_width: 3
+    title: GPU 0 - RTX3090
+  - type: grid
+    cards:
+      - type: custom:layout-card
+        layout_type: masonry
+        layout: {}
+        cards:
+          - type: gauge
+            entity: sensor.nas_gpu_power_rtx_a4000_a
+            unit: W
+            name: RTX A4000 A Power
+            min: 20
+            max: 140
+            severity:
+              green: 25
+              yellow: 120
+              red: 130
+            needle: true
+          - type: gauge
+            entity: sensor.nas_gpu_temperature_rtx_a4000_a
+            max: 92
+            severity:
+              green: 60
+              yellow: 80
+              red: 90
+            needle: true
+            min: 0
+            unit: ℃
+          - type: grid
+            columns: 2
+            cards:
+              - type: gauge
+                entity: sensor.nas_gpu_utilisation_rtx_a4000_a
+                max: 100
+                severity:
+                  green: 80
+                  yellow: 90
+                  red: 95
+                needle: true
+                min: 0
+                unit: "%"
+              - type: gauge
+                entity: sensor.nas_gpu_memory_used_rtx_a4000_a
+                unit: GB
+                max: 24
+                severity:
+                  green: 20
+                  yellow: 22
+                  red: 23.9
+                needle: true
+                min: 0
+      - type: custom:apexcharts-card
+        header:
+          show: true
+          title: RTX A4000 A
+          show_states: true
+          colorize_states: true
+        apex_config:
+          chart:
+            height: 300px
+            update_interval: 2m
+        graph_span: 12h
+        series:
+          - entity: sensor.nas_gpu_1_power_watts
+            stroke_width: 3
+          - entity: sensor.nas_gpu_utilisation_rtx_a4000_a
+            stroke_width: 2
+          - entity: sensor.nas_gpu_temperature_rtx_a4000_a
+            stroke_width: 3
+    title: GPU 1 - RTX A4000 A
+  - type: grid
+    cards:
+      - type: custom:layout-card
+        layout_type: masonry
+        layout: {}
+        cards:
+          - type: gauge
+            entity: sensor.nas_gpu_power_rtx_a4000_b
+            unit: W
+            name: RTX A4000 B Power
+            min: 20
+            max: 140
+            severity:
+              green: 25
+              yellow: 120
+              red: 130
+            needle: true
+          - type: gauge
+            entity: sensor.nas_gpu_temperature_rtx_a4000_b
+            max: 92
+            severity:
+              green: 60
+              yellow: 80
+              red: 90
+            needle: true
+            min: 0
+            unit: ℃
+          - type: grid
+            columns: 2
+            cards:
+              - type: gauge
+                entity: sensor.nas_gpu_utilisation_rtx_a4000_b_2
+                max: 100
+                severity:
+                  green: 80
+                  yellow: 90
+                  red: 95
+                needle: true
+                min: 0
+                unit: "%"
+              - type: gauge
+                entity: sensor.nas_gpu_memory_used_rtx_a4000_b
+                unit: GB
+                max: 24
+                severity:
+                  green: 20
+                  yellow: 22
+                  red: 23.9
+                needle: true
+                min: 0
+      - type: custom:apexcharts-card
+        header:
+          show: true
+          title: RTX A4000 B
+          show_states: true
+          colorize_states: true
+        apex_config:
+          chart:
+            height: 300px
+            update_interval: 2m
+        graph_span: 12h
+        series:
+          - entity: sensor.nas_gpu_utilisation_rtx_a4000_b
+            stroke_width: 2
+          - entity: sensor.nas_gpu_temperature_rtx_a4000_b
+            stroke_width: 3
+    title: GPU 2 - RTX A4000 B
+cards: []
 ```
 
 ## NVApi-Tray GUI
