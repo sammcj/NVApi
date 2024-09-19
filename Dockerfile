@@ -1,5 +1,5 @@
 # Build stage
-FROM nvcr.io/nvidia/cuda:12.5.0-devel-ubuntu22.04 as builder
+FROM nvcr.io/nvidia/cuda:12.6.1-devel-ubuntu22.04 as builder
 
 LABEL org.opencontainers.image.description "NVApi is a lightweight API that exposes NVIDIA GPU metrics"
 
@@ -18,8 +18,12 @@ RUN go build -o /app/nvapi main.go && \
 # Runtime stage
 #FROM nvcr.io/nvidia/cuda:12.4.1-runtime-ubuntu22.04
 
+ENV NVIDIA_VISIBLE_DEVICES all
+
 #WORKDIR /app
 
 #COPY --from=builder /app/nvapi /app/nvapi
+
+EXPOSE 9999
 
 CMD ["/app/nvapi"]
