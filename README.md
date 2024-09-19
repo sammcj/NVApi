@@ -155,6 +155,31 @@ With this configuration:
    - If temperature is between 46°C and 75°C, the power limit will be set to 125W
    - If temperature is above 75°C, the power limit will be set to 110W
 
+Note: If you're running nvAPI in a container and want to configure power limits, you need to grant `SYS_ADMIN` to allow setting power limits on the devices, e.g:
+
+```yaml
+services:
+  nvapi:
+    image: ghcr.io/sammcj/nvapi/nvapi:latest
+    pid: host # so we can lookup process names
+    ports:
+      - 9999:9999
+    environment:
+      GPU_TEMP_CHECK_INTERVAL: 5
+      GPU_0_LOW_TEMP: 50
+      GPU_0_MEDIUM_TEMP: 80
+      GPU_0_LOW_TEMP_LIMIT: 370
+      GPU_0_MEDIUM_TEMP_LIMIT: 360
+      GPU_0_HIGH_TEMP_LIMIT: 300
+      GPU_1_LOW_TEMP: 50
+      GPU_1_MEDIUM_TEMP: 78
+      GPU_1_LOW_TEMP_LIMIT: 140
+      GPU_1_MEDIUM_TEMP_LIMIT: 122
+      GPU_1_HIGH_TEMP_LIMIT: 100
+    cap_add:
+      - SYS_ADMIN # grant permissions to set power limits
+```
+
 #### Behaviour
 
 The program will automatically adjust the power limits as the GPU temperatures change during operation. This can help manage power consumption and heat generation based on the current workload and thermal conditions.
