@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -16,7 +17,7 @@ import (
 	"github.com/NVIDIA/go-nvml/pkg/nvml"
 )
 
-const version = "1.1.0"
+const version = "1.2.0"
 
 type GPUInfo struct {
 	Index              uint          `json:"index"`
@@ -34,21 +35,98 @@ type GPUInfo struct {
 	Processes          []ProcessInfo `json:"processes"`
 }
 
+type ProcessInfo struct {
+	Pid             uint32   `json:"pid"`
+	UsedGpuMemoryMb uint64   `json:"used_gpu_memory_mb"`
+	Name            string   `json:"name"`
+	Arguments       []string `json:"arguments"`
+}
+
 type rateLimiter struct {
 	tokens   float64
 	capacity float64
 	rate     float64
 	mu       sync.Mutex
 	lastTime time.Time
-	cache    *[]GPUInfo // Add a cache variable to store cached GPUInfo data
+	cache    *[]GPUInfo
 }
 
-type ProcessInfo struct {
-	Pid             uint32
-	UsedGpuMemoryMb uint64
-	Name            string
-	Arguments       []string
+// TempPowerLimits holds the temperature-based power limit settings for a GPU
+type TempPowerLimits struct {
+	LowTemp         int
+	MediumTemp      int
+	LowTempLimit    uint
+	MediumTempLimit uint
+	HighTempLimit   uint
 }
+
+var (
+	port               = flag.Int("port", 9999, "Port to listen on")
+	rate               = flag.Int("rate", 3, "Minimum number of seconds between requests")
+	debug              = flag.Bool("debug", false, "Print debug logs to the console")
+	help               = flag.Bool("help", false, "Print this help")
+	gpuPowerLimits     map[int]TempPowerLimits
+	tempCheckInterval  time.Duration
+	lastTempCheckTime  time.Time
+)
+
+
+func parseTempCheckInterval() {
+	intervalStr := os.Getenv("GPU_TEMP_CHECK_INTERVAL")
+	if intervalStr == "" {
+		tempCheckInterval = 5 * time.Second // Default to 5 seconds if not set
+		return
+	}
+
+	interval, err := strconv.Atoi(intervalStr)
+	if err != nil {
+		log.Printf("Warning: Invalid GPU_TEMP_CHECK_INTERVAL value. Using default of 5 seconds.")
+		tempCheckInterval = 5 * time.Second
+		return
+	}
+
+	tempCheckInterval = time.Duration(interval) * time.Second
+}
+
+
+func checkAndApplyPowerLimits() error {
+	if time.Since(lastTempCheckTime) < tempCheckInterval {
+		return nil
+	}
+
+	lastTempCheckTime = time.Now()
+
+	ret := nvml.Init()
+	if ret != nvml.SUCCESS {
+		return fmt.Errorf("unable to initialize NVML: %v", nvml.ErrorString(ret))
+	}
+	defer nvml.Shutdown()
+
+	count, ret := nvml.DeviceGetCount()
+	if ret != nvml.SUCCESS {
+		return fmt.Errorf("unable to get device count: %v", nvml.ErrorString(ret))
+	}
+
+	for i := 0; i < int(count); i++ {
+		device, ret := nvml.DeviceGetHandleByIndex(i)
+		if ret != nvml.SUCCESS {
+			return fmt.Errorf("unable to get device at index %d: %v", i, nvml.ErrorString(ret))
+		}
+
+		temperature, ret := device.GetTemperature(nvml.TEMPERATURE_GPU)
+		if ret != nvml.SUCCESS {
+			return fmt.Errorf("unable to get temperature for GPU %d: %v", i, nvml.ErrorString(ret))
+		}
+
+		err := applyPowerLimit(device, i, uint(temperature))
+		if err != nil {
+			log.Printf("Warning: Failed to apply power limit for GPU %d: %v", i, err)
+		}
+	}
+
+	return nil
+}
+
 
 func (rl *rateLimiter) takeToken() bool {
 	rl.mu.Lock()
@@ -67,7 +145,6 @@ func (rl *rateLimiter) takeToken() bool {
 }
 
 func (rl *rateLimiter) getCache() []GPUInfo {
-	// Return the cached response or a default value if no cache exists
 	return *(rl.cache)
 }
 
@@ -85,7 +162,62 @@ func getProcessInfo(pid uint32) (string, []string, error) {
 	return processName, arguments, nil
 }
 
+// parseTempPowerLimits parses the environment variables for temperature-based power limits
+func parseTempPowerLimits() {
+	gpuPowerLimits = make(map[int]TempPowerLimits)
+
+	for i := 0; ; i++ {
+		prefix := fmt.Sprintf("GPU_%d_", i)
+		lowTemp, err1 := strconv.Atoi(os.Getenv(prefix + "LOW_TEMP"))
+		mediumTemp, err2 := strconv.Atoi(os.Getenv(prefix + "MEDIUM_TEMP"))
+		lowTempLimit, err3 := strconv.ParseUint(os.Getenv(prefix + "LOW_TEMP_LIMIT"), 10, 32)
+		mediumTempLimit, err4 := strconv.ParseUint(os.Getenv(prefix + "MEDIUM_TEMP_LIMIT"), 10, 32)
+		highTempLimit, err5 := strconv.ParseUint(os.Getenv(prefix + "HIGH_TEMP_LIMIT"), 10, 32)
+
+		if err1 != nil || err2 != nil || err3 != nil || err4 != nil || err5 != nil {
+			break
+		}
+
+		gpuPowerLimits[i] = TempPowerLimits{
+			LowTemp:         lowTemp,
+			MediumTemp:      mediumTemp,
+			LowTempLimit:    uint(lowTempLimit),
+			MediumTempLimit: uint(mediumTempLimit),
+			HighTempLimit:   uint(highTempLimit),
+		}
+	}
+}
+
+// applyPowerLimit applies the appropriate power limit based on the current temperature
+func applyPowerLimit(device nvml.Device, index int, currentTemp uint) error {
+	limits, exists := gpuPowerLimits[index]
+	if !exists {
+		return nil // No limits set for this GPU
+	}
+
+	var newLimit uint
+	if currentTemp <= uint(limits.LowTemp) {
+		newLimit = limits.LowTempLimit
+	} else if currentTemp <= uint(limits.MediumTemp) {
+		newLimit = limits.MediumTempLimit
+	} else {
+		newLimit = limits.HighTempLimit
+	}
+
+	ret := device.SetPowerManagementLimit(uint32(newLimit * 1000)) // Convert watts to milliwatts
+	if ret != nvml.SUCCESS {
+		return fmt.Errorf("unable to set power management limit: %v", nvml.ErrorString(ret))
+	}
+
+	return nil
+}
+
 func GetGPUInfo() ([]GPUInfo, error) {
+	err := checkAndApplyPowerLimits()
+	if err != nil {
+		log.Printf("Warning: Failed to check and apply power limits: %v", err)
+	}
+
 	ret := nvml.Init()
 	if ret != nvml.SUCCESS {
 		return nil, fmt.Errorf("unable to initialise NVML: %v", nvml.ErrorString(ret))
@@ -143,6 +275,12 @@ func GetGPUInfo() ([]GPUInfo, error) {
 			return nil, fmt.Errorf("unable to get temperature: %v", nvml.ErrorString(ret))
 		}
 
+		// Apply power limit based on temperature
+		err := applyPowerLimit(device, i, uint(temperature))
+		if err != nil {
+			log.Printf("Warning: Failed to apply power limit for GPU %d: %v", i, err)
+		}
+
 		fanSpeed, ret := device.GetFanSpeed()
 		if ret != nvml.SUCCESS {
 			return nil, fmt.Errorf("unable to get fan speed: %v", nvml.ErrorString(ret))
@@ -194,12 +332,6 @@ func GetGPUInfo() ([]GPUInfo, error) {
 	return gpuInfos, nil
 }
 
-var (
-	port  = flag.Int("port", 9999, "Port to listen on")
-	rate  = flag.Int("rate", 3, "Minimum number of seconds between requests")
-	debug = flag.Bool("debug", false, "Print debug logs to the console")
-	help  = flag.Bool("help", false, "Print this help")
-)
 
 func main() {
 	println("NVApi Version: ", version)
@@ -232,17 +364,22 @@ func main() {
 		return
 	}
 
+	// Parse temperature-based power limits from environment variables
+	parseTempPowerLimits()
+
+	// Parse temperature check interval from environment variable
+	parseTempCheckInterval()
+
 	rl := &rateLimiter{
-		capacity: float64(1),            // Use explicit conversion to avoid errors with integer division
-		rate:     float64(*rate) / 3600, // Convert rate from seconds to hours for better readability
-		cache:    new([]GPUInfo),        // Initialize cache as a pointer to slice of GPUInfo structs
+		capacity: float64(1),
+		rate:     float64(*rate) / 3600,
+		cache:    new([]GPUInfo),
 	}
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json") // Set Content-Type header for JSON response
+		w.Header().Set("Content-Type", "application/json")
 
 		if !rl.takeToken() {
-			// Rate limit exceeded, return the cached response or default value
 			json.NewEncoder(w).Encode(rl.getCache())
 			return
 		}
@@ -253,7 +390,7 @@ func main() {
 			return
 		}
 
-		*rl.cache = gpuInfos // Assign the returned GPUInfo slice to cache
+		*rl.cache = gpuInfos
 		json.NewEncoder(w).Encode(gpuInfos)
 
 		if *debug {
@@ -262,7 +399,7 @@ func main() {
 	})
 
 	http.HandleFunc("/gpu", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json") // Set Content-Type header for JSON response
+		w.Header().Set("Content-Type", "application/json")
 
 		pathToField := map[string]func(*GPUInfo) interface{}{
 			"/gpu/index":                func(gpuInfo *GPUInfo) interface{} { return gpuInfo.Index },
@@ -281,18 +418,12 @@ func main() {
 			"/gpu/processes":            func(gpuInfo *GPUInfo) interface{} { return gpuInfo.Processes },
 		}
 
-		// if debug is enabled, print the path
 		if *debug {
 			fmt.Println("Path: ", r.URL.Path)
-		}
-
-		// if debug is enable print the request
-		if *debug {
 			fmt.Println("Request: ", r)
 		}
 
 		if !rl.takeToken() {
-			// Rate limit exceeded, return the cached response or default value
 			json.NewEncoder(w).Encode(rl.getCache())
 			return
 		}
@@ -303,7 +434,7 @@ func main() {
 			return
 		}
 
-		*rl.cache = gpuInfos // Assign the returned GPUInfo slice to cache
+		*rl.cache = gpuInfos
 
 		for _, gpuInfo := range gpuInfos {
 			path := r.URL.Path

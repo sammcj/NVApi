@@ -6,6 +6,22 @@ A lightweight API that returns Nvidia GPU utilisation information.
 
 ![](screenshots/home-assistant-integration-2.png)
 
+- [NVApi](#nvapi)
+  - [Usage](#usage)
+    - [Docker Container](#docker-container)
+    - [Local Installation](#local-installation)
+  - [API Endpoints](#api-endpoints)
+    - [`/`](#)
+  - [Query Parameters](#query-parameters)
+  - [Example Response](#example-response)
+    - [Automated Power Limiting](#automated-power-limiting)
+      - [Configuration](#configuration)
+      - [Example Configuration](#example-configuration)
+      - [Behaviour](#behaviour)
+    - [Home Assistant Integration](#home-assistant-integration)
+  - [NVApi-Tray GUI](#nvapi-tray-gui)
+  - [License](#license)
+
 ## Usage
 
 ### Docker Container
@@ -88,6 +104,72 @@ curl http://localhost:9999/gpu
   }],
 }]
 ```
+
+### Automated Power Limiting
+
+NVApi now supports automated power limiting based on GPU temperature. This feature allows you to set different power limits for each GPU that will be automatically applied as the temperature changes. You can configure this feature using environment variables.
+
+#### Configuration
+
+To set up automated power limiting, you need to set the following environment variables for each GPU:
+
+- `GPU_<id>_LOW_TEMP`: The temperature threshold for low power limit (in °C)
+- `GPU_<id>_MEDIUM_TEMP`: The temperature threshold for medium power limit (in °C)
+- `GPU_<id>_LOW_TEMP_LIMIT`: The power limit to apply when temperature is at or below `LOW_TEMP` (in watts)
+- `GPU_<id>_MEDIUM_TEMP_LIMIT`: The power limit to apply when temperature is between `LOW_TEMP` and `MEDIUM_TEMP` (in watts)
+- `GPU_<id>_HIGH_TEMP_LIMIT`: The power limit to apply when temperature is above `MEDIUM_TEMP` (in watts)
+
+Replace `<id>` with the index of the GPU (starting from 0).
+
+Additionally, you can set the interval for temperature checks and power limit applications:
+
+- `GPU_TEMP_CHECK_INTERVAL`: The interval between temperature checks and power limit applications (in seconds, default is 5)
+
+#### Example Configuration
+
+Here's an example configuration for a system with two GPUs:
+
+```bash
+export GPU_TEMP_CHECK_INTERVAL=10
+export GPU_0_LOW_TEMP=40
+export GPU_0_MEDIUM_TEMP=70
+export GPU_0_LOW_TEMP_LIMIT=135
+export GPU_0_MEDIUM_TEMP_LIMIT=120
+export GPU_0_HIGH_TEMP_LIMIT=100
+export GPU_1_LOW_TEMP=45
+export GPU_1_MEDIUM_TEMP=75
+export GPU_1_LOW_TEMP_LIMIT=140
+export GPU_1_MEDIUM_TEMP_LIMIT=125
+export GPU_1_HIGH_TEMP_LIMIT=110
+```
+
+With this configuration:
+
+1. Temperature and power limits will be checked every 10 seconds.
+2. For GPU 0:
+   - If temperature is 40°C or below, the power limit will be set to 135W
+   - If temperature is between 41°C and 70°C, the power limit will be set to 120W
+   - If temperature is above 70°C, the power limit will be set to 100W
+3. For GPU 1:
+   - If temperature is 45°C or below, the power limit will be set to 140W
+   - If temperature is between 46°C and 75°C, the power limit will be set to 125W
+   - If temperature is above 75°C, the power limit will be set to 110W
+
+#### Behaviour
+
+The program will automatically adjust the power limits as the GPU temperatures change during operation. This can help manage power consumption and heat generation based on the current workload and thermal conditions.
+
+If you don't set these environment variables, the automated power limiting feature will not be active, and the GPUs will use their default power limits.
+
+Partial Configuration Behaviour
+If you provide only some of the environment variables for a GPU, the following behaviour applies:
+
+If any of the five required variables for a GPU (`LOW_TEMP`, `MEDIUM_TEMP`, `LOW_TEMP_LIMIT`, `MEDIUM_TEMP_LIMIT`, `HIGH_TEMP_LIMIT`) are missing, the automated power limiting feature will not be activated for that specific GPU. The GPU will use its default power management settings.
+
+If all five variables are provided for a GPU, the feature will be active for that GPU, regardless of whether variables are set for other GPUs in the system.
+
+The `GPU_TEMP_CHECK_INTERVAL` is a global setting. If not provided, it defaults to 5 seconds. This interval applies to all GPUs for which the feature is active.
+You can activate the feature for some GPUs and not others by providing complete sets of variables for the desired GPUs only.
 
 ### Home Assistant Integration
 
