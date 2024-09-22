@@ -366,7 +366,8 @@ func main() {
 		cache:    new([]GPUInfo),
 	}
 
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	// Handler function to get GPU info
+	getGPUInfoHandler := func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
 		if !rl.takeToken() {
@@ -386,8 +387,10 @@ func main() {
 		if *debug {
 			fmt.Println("GPU Info: ", gpuInfos)
 		}
-	})
+	}
 
+	// Set up routes
+	http.HandleFunc("/", getGPUInfoHandler)
 	http.HandleFunc("/gpu", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
@@ -430,15 +433,14 @@ func main() {
 			path := r.URL.Path
 			if f, ok := pathToField[path]; ok {
 				json.NewEncoder(w).Encode(f(&gpuInfo))
-			} else {
-				json.NewEncoder(w).Encode(gpuInfo)
+				return
 			}
 		}
+
+		// If no specific field is matched, return all GPU info
+		json.NewEncoder(w).Encode(gpuInfos)
 	})
 
+	log.Printf("Server starting on port %d", *port)
 	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", *port), nil))
-
-	// if err := nvml.Shutdown(); err != nvml.SUCCESS {
-	// 	log.Fatalf("unable to shutdown NVML: %v", nvml.ErrorString(err))
-	// }
 }
