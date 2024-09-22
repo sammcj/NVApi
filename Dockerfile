@@ -1,5 +1,5 @@
 # Build stage
-FROM nvcr.io/nvidia/cuda:12.6.1-devel-ubuntu22.04 as builder
+FROM nvcr.io/nvidia/cuda:12.6.1-devel-ubuntu22.04 AS builder
 
 LABEL org.opencontainers.image.description "NVApi is a lightweight API that exposes NVIDIA GPU metrics"
 

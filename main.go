@@ -360,37 +360,47 @@ func main() {
 	// Parse temperature check interval from environment variable
 	parseTempCheckInterval()
 
+
 	rl := &rateLimiter{
 		capacity: float64(1),
 		rate:     float64(*rate) / 3600,
 		cache:    new([]GPUInfo),
 	}
 
-	// Handler function to get GPU info
-	getGPUInfoHandler := func(w http.ResponseWriter, r *http.Request) {
+	// Start a goroutine to periodically update the GPU info
+	go func() {
+		for {
+			gpuInfos, err := GetGPUInfo()
+			if err != nil {
+				log.Printf("Error updating GPU info: %v", err)
+			} else {
+				rl.mu.Lock()
+				*rl.cache = gpuInfos
+				rl.mu.Unlock()
+			}
+			time.Sleep(time.Duration(*rate) * time.Second)
+		}
+	}()
+
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
 		if !rl.takeToken() {
-			json.NewEncoder(w).Encode(rl.getCache())
+			rl.mu.Lock()
+			json.NewEncoder(w).Encode(rl.cache)
+			rl.mu.Unlock()
 			return
 		}
 
-		gpuInfos, err := GetGPUInfo()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		*rl.cache = gpuInfos
-		json.NewEncoder(w).Encode(gpuInfos)
+		rl.mu.Lock()
+		json.NewEncoder(w).Encode(rl.cache)
+		rl.mu.Unlock()
 
 		if *debug {
-			fmt.Println("GPU Info: ", gpuInfos)
+			fmt.Println("GPU Info: ", rl.cache)
 		}
-	}
+	})
 
-	// Set up routes
-	http.HandleFunc("/", getGPUInfoHandler)
 	http.HandleFunc("/gpu", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
