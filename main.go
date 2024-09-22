@@ -96,12 +96,6 @@ func checkAndApplyPowerLimits() error {
 
 	lastTempCheckTime = time.Now()
 
-	ret := nvml.Init()
-	if ret != nvml.SUCCESS {
-		return fmt.Errorf("unable to initialize NVML: %v", nvml.ErrorString(ret))
-	}
-	defer nvml.Shutdown()
-
 	count, ret := nvml.DeviceGetCount()
 	if ret != nvml.SUCCESS {
 		return fmt.Errorf("unable to get device count: %v", nvml.ErrorString(ret))
@@ -212,17 +206,12 @@ func applyPowerLimit(device nvml.Device, index int, currentTemp uint) error {
 	return nil
 }
 
+
 func GetGPUInfo() ([]GPUInfo, error) {
 	err := checkAndApplyPowerLimits()
 	if err != nil {
 		log.Printf("Warning: Failed to check and apply power limits: %v", err)
 	}
-
-	ret := nvml.Init()
-	if ret != nvml.SUCCESS {
-		return nil, fmt.Errorf("unable to initialise NVML: %v", nvml.ErrorString(ret))
-	}
-	defer nvml.Shutdown()
 
 	count, ret := nvml.DeviceGetCount()
 	if ret != nvml.SUCCESS {
@@ -353,6 +342,7 @@ func main() {
 	if ret != nvml.SUCCESS {
 		log.Fatalf("unable to initialise NVML: %v", nvml.ErrorString(ret))
 	}
+	defer nvml.Shutdown()
 
 	count, err := nvml.DeviceGetCount()
 	if err != nvml.SUCCESS || count == 0 {
@@ -448,7 +438,7 @@ func main() {
 
 	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", *port), nil))
 
-	if err := nvml.Shutdown(); err != nvml.SUCCESS {
-		log.Fatalf("unable to shutdown NVML: %v", nvml.ErrorString(err))
-	}
+	// if err := nvml.Shutdown(); err != nvml.SUCCESS {
+	// 	log.Fatalf("unable to shutdown NVML: %v", nvml.ErrorString(err))
+	// }
 }
