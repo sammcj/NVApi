@@ -17,7 +17,7 @@ import (
 	"github.com/NVIDIA/go-nvml/pkg/nvml"
 )
 
-const version = "1.3.0"
+const version = "1.3.1"
 
 type GPUInfo struct {
 	Index              uint          `json:"index"`
@@ -89,6 +89,7 @@ func parseTotalPowerCap() {
 	totalPowerCap = uint(cap)
 }
 
+
 func applyTotalPowerCap(devices []nvml.Device, currentPowerLimits []uint) error {
 	if totalPowerCap == 0 {
 		return nil // Total power cap is disabled
@@ -152,7 +153,6 @@ func checkAndApplyPowerLimits() error {
 	}
 
 	var devices []nvml.Device
-	var temperatures []uint
 	var currentPowerLimits []uint
 
 	for i := 0; i < int(count); i++ {
@@ -161,28 +161,29 @@ func checkAndApplyPowerLimits() error {
 			return fmt.Errorf("unable to get device at index %d: %v", i, nvml.ErrorString(ret))
 		}
 
-		temperature, ret := device.GetTemperature(nvml.TEMPERATURE_GPU)
-		if ret != nvml.SUCCESS {
-			return fmt.Errorf("unable to get temperature for GPU %d: %v", i, nvml.ErrorString(ret))
-		}
-
 		powerLimit, ret := device.GetPowerManagementLimit()
 		if ret != nvml.SUCCESS {
 			return fmt.Errorf("unable to get power management limit for GPU %d: %v", i, nvml.ErrorString(ret))
 		}
 
 		devices = append(devices, device)
-		temperatures = append(temperatures, uint(temperature))
 		currentPowerLimits = append(currentPowerLimits, uint(powerLimit/1000)) // Convert milliwatts to watts
-	}
 
-	for i, device := range devices {
-		err := applyPowerLimit(device, i, temperatures[i])
-		if err != nil {
-			log.Printf("Warning: Failed to apply power limit for GPU %d: %v", i, err)
+		// Only apply individual temperature-based limits if they are configured
+		if _, exists := gpuPowerLimits[i]; exists {
+			temperature, ret := device.GetTemperature(nvml.TEMPERATURE_GPU)
+			if ret != nvml.SUCCESS {
+				return fmt.Errorf("unable to get temperature for GPU %d: %v", i, nvml.ErrorString(ret))
+			}
+
+			err := applyPowerLimit(device, i, uint(temperature))
+			if err != nil {
+				log.Printf("Warning: Failed to apply power limit for GPU %d: %v", i, err)
+			}
 		}
 	}
 
+	// Always apply total power cap if it's set, regardless of individual temperature limits
 	err := applyTotalPowerCap(devices, currentPowerLimits)
 	if err != nil {
 		log.Printf("Warning: Failed to apply total power cap: %v", err)
@@ -190,6 +191,7 @@ func checkAndApplyPowerLimits() error {
 
 	return nil
 }
+
 
 func (rl *rateLimiter) takeToken() bool {
 	rl.mu.Lock()
@@ -419,6 +421,12 @@ func main() {
 	if *help {
 		flag.Usage()
 		return
+	}
+
+	// Print any configured power limits
+	for i, limits := range gpuPowerLimits {
+		log.Printf("GPU %d power limits: LowTemp: %d, LowTempLimit: %d W, MediumTemp: %d, MediumTempLimit: %d W, HighTempLimit: %d W",
+			i, limits.LowTemp, limits.LowTempLimit, limits.MediumTemp, limits.MediumTempLimit, limits.HighTempLimit)
 	}
 
 	// Parse temperature-based power limits from environment variables
