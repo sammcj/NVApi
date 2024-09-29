@@ -17,7 +17,7 @@ import (
 	"github.com/NVIDIA/go-nvml/pkg/nvml"
 )
 
-const version = "1.2.0"
+const version = "1.3.0"
 
 type GPUInfo struct {
 	Index              uint          `json:"index"`
@@ -61,15 +61,66 @@ type TempPowerLimits struct {
 }
 
 var (
-	port               = flag.Int("port", 9999, "Port to listen on")
-	rate               = flag.Int("rate", 3, "Minimum number of seconds between requests")
-	debug              = flag.Bool("debug", false, "Print debug logs to the console")
-	help               = flag.Bool("help", false, "Print this help")
-	gpuPowerLimits     map[int]TempPowerLimits
-	tempCheckInterval  time.Duration
-	lastTempCheckTime  time.Time
+	port              = flag.Int("port", 9999, "Port to listen on")
+	rate              = flag.Int("rate", 3, "Minimum number of seconds between requests")
+	debug             = flag.Bool("debug", false, "Print debug logs to the console")
+	help              = flag.Bool("help", false, "Print this help")
+	gpuPowerLimits    map[int]TempPowerLimits
+	tempCheckInterval time.Duration
+	lastTempCheckTime time.Time
+	totalPowerCap     uint
+	lastTotalPower    uint
 )
 
+func parseTotalPowerCap() {
+	capStr := os.Getenv("GPU_TOTAL_POWER_CAP")
+	if capStr == "" {
+		totalPowerCap = 0 // Disabled if not set
+		return
+	}
+
+	cap, err := strconv.ParseUint(capStr, 10, 32)
+	if err != nil {
+		log.Printf("Warning: Invalid GPU_TOTAL_POWER_CAP value. Total power cap will be disabled.")
+		totalPowerCap = 0
+		return
+	}
+
+	totalPowerCap = uint(cap)
+}
+
+func applyTotalPowerCap(devices []nvml.Device, currentPowerLimits []uint) error {
+	if totalPowerCap == 0 {
+		return nil // Total power cap is disabled
+	}
+
+	var totalPower uint
+	for _, power := range currentPowerLimits {
+		totalPower += power
+	}
+
+	if totalPower > totalPowerCap {
+		log.Printf("Total power (%d W) exceeds the cap (%d W). Adjusting limits...", totalPower, totalPowerCap)
+
+		// Calculate the reduction factor
+		reductionFactor := float64(totalPowerCap) / float64(totalPower)
+
+		// Apply the reduction to each GPU
+		for i, device := range devices {
+			newLimit := uint(float64(currentPowerLimits[i]) * reductionFactor)
+			ret := device.SetPowerManagementLimit(uint32(newLimit * 1000)) // Convert watts to milliwatts
+			if ret != nvml.SUCCESS {
+				return fmt.Errorf("unable to set power management limit for GPU %d: %v", i, nvml.ErrorString(ret))
+			}
+			log.Printf("GPU %d power limit adjusted from %d W to %d W", i, currentPowerLimits[i], newLimit)
+		}
+	} else if totalPower >= uint(float64(totalPowerCap)*0.98) && totalPower != lastTotalPower {
+		log.Printf("Warning: Total power (%d W) is approaching the cap (%d W)", totalPower, totalPowerCap)
+	}
+
+	lastTotalPower = totalPower
+	return nil
+}
 
 func parseTempCheckInterval() {
 	intervalStr := os.Getenv("GPU_TEMP_CHECK_INTERVAL")
@@ -88,7 +139,6 @@ func parseTempCheckInterval() {
 	tempCheckInterval = time.Duration(interval) * time.Second
 }
 
-
 func checkAndApplyPowerLimits() error {
 	if time.Since(lastTempCheckTime) < tempCheckInterval {
 		return nil
@@ -101,6 +151,10 @@ func checkAndApplyPowerLimits() error {
 		return fmt.Errorf("unable to get device count: %v", nvml.ErrorString(ret))
 	}
 
+	var devices []nvml.Device
+	var temperatures []uint
+	var currentPowerLimits []uint
+
 	for i := 0; i < int(count); i++ {
 		device, ret := nvml.DeviceGetHandleByIndex(i)
 		if ret != nvml.SUCCESS {
@@ -112,15 +166,30 @@ func checkAndApplyPowerLimits() error {
 			return fmt.Errorf("unable to get temperature for GPU %d: %v", i, nvml.ErrorString(ret))
 		}
 
-		err := applyPowerLimit(device, i, uint(temperature))
+		powerLimit, ret := device.GetPowerManagementLimit()
+		if ret != nvml.SUCCESS {
+			return fmt.Errorf("unable to get power management limit for GPU %d: %v", i, nvml.ErrorString(ret))
+		}
+
+		devices = append(devices, device)
+		temperatures = append(temperatures, uint(temperature))
+		currentPowerLimits = append(currentPowerLimits, uint(powerLimit/1000)) // Convert milliwatts to watts
+	}
+
+	for i, device := range devices {
+		err := applyPowerLimit(device, i, temperatures[i])
 		if err != nil {
 			log.Printf("Warning: Failed to apply power limit for GPU %d: %v", i, err)
 		}
 	}
 
+	err := applyTotalPowerCap(devices, currentPowerLimits)
+	if err != nil {
+		log.Printf("Warning: Failed to apply total power cap: %v", err)
+	}
+
 	return nil
 }
-
 
 func (rl *rateLimiter) takeToken() bool {
 	rl.mu.Lock()
@@ -164,9 +233,9 @@ func parseTempPowerLimits() {
 		prefix := fmt.Sprintf("GPU_%d_", i)
 		lowTemp, err1 := strconv.Atoi(os.Getenv(prefix + "LOW_TEMP"))
 		mediumTemp, err2 := strconv.Atoi(os.Getenv(prefix + "MEDIUM_TEMP"))
-		lowTempLimit, err3 := strconv.ParseUint(os.Getenv(prefix + "LOW_TEMP_LIMIT"), 10, 32)
-		mediumTempLimit, err4 := strconv.ParseUint(os.Getenv(prefix + "MEDIUM_TEMP_LIMIT"), 10, 32)
-		highTempLimit, err5 := strconv.ParseUint(os.Getenv(prefix + "HIGH_TEMP_LIMIT"), 10, 32)
+		lowTempLimit, err3 := strconv.ParseUint(os.Getenv(prefix+"LOW_TEMP_LIMIT"), 10, 32)
+		mediumTempLimit, err4 := strconv.ParseUint(os.Getenv(prefix+"MEDIUM_TEMP_LIMIT"), 10, 32)
+		highTempLimit, err5 := strconv.ParseUint(os.Getenv(prefix+"HIGH_TEMP_LIMIT"), 10, 32)
 
 		if err1 != nil || err2 != nil || err3 != nil || err4 != nil || err5 != nil {
 			break
@@ -205,7 +274,6 @@ func applyPowerLimit(device nvml.Device, index int, currentTemp uint) error {
 
 	return nil
 }
-
 
 func GetGPUInfo() ([]GPUInfo, error) {
 	err := checkAndApplyPowerLimits()
@@ -321,7 +389,6 @@ func GetGPUInfo() ([]GPUInfo, error) {
 	return gpuInfos, nil
 }
 
-
 func main() {
 	println("NVApi Version: ", version)
 	flag.Parse()
@@ -360,6 +427,8 @@ func main() {
 	// Parse temperature check interval from environment variable
 	parseTempCheckInterval()
 
+	// Parse total power cap from environment variable
+	parseTotalPowerCap()
 
 	rl := &rateLimiter{
 		capacity: float64(1),
