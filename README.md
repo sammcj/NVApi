@@ -214,14 +214,17 @@ You can set a total power cap for all GPUs without specifying individual tempera
 export GPU_TOTAL_POWER_CAP=400
 ```
 
-In this configuration:
+1. The total power cap is applied based on the actual power consumption of all GPUs, not their maximum power limits.
+2. If the total actual power consumption exceeds the cap:
+   - Power limits are adjusted proportionally to each GPU's current consumption.
+   - GPUs that aren't consuming power (idle GPUs) are not affected.
+   - Busy GPUs may retain more of their power budget, allowing for efficient use of available power.
+3. When the total power consumption is below the cap:
+   - All GPUs are allowed to use up to their maximum power limits.
+   - This allows individual GPUs to use more power when others are idle, as long as the total consumption remains under the cap.
+4. If the total power consumption approaches 98% of the cap, a warning is logged.
 
-1. The total power consumption of all GPUs combined will not exceed 400W.
-2. If the total power consumption approaches 98% of the cap, a warning will be logged.
-3. If the total power consumption exceeds the cap, the power limits of all GPUs will be proportionally reduced to meet the cap.
-4. Individual GPU temperature-based limits will not be applied unless they are explicitly configured.
-
-This allows for a simple way to limit total power consumption across all GPUs without needing to configure individual temperature-based limits for each GPU.
+This approach ensures that the total power cap is respected while allowing for flexible and efficient use of available power across all GPUs.
 
 ### Home Assistant Integration
 

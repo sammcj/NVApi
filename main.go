@@ -17,7 +17,7 @@ import (
 	"github.com/NVIDIA/go-nvml/pkg/nvml"
 )
 
-const version = "1.3.1"
+const version = "1.3.2"
 
 type GPUInfo struct {
 	Index              uint          `json:"index"`
@@ -89,33 +89,66 @@ func parseTotalPowerCap() {
 	totalPowerCap = uint(cap)
 }
 
-func applyTotalPowerCap(devices []nvml.Device, currentPowerLimits []uint) error {
+func applyTotalPowerCap(devices []nvml.Device) error {
 	if totalPowerCap == 0 {
 		return nil // Total power cap is disabled
 	}
 
 	var totalPower uint
-	for _, power := range currentPowerLimits {
-		totalPower += power
+	var currentPowers []uint
+	var maxPowerLimits []uint
+
+	for _, device := range devices {
+		power, ret := device.GetPowerUsage()
+		if ret != nvml.SUCCESS {
+			return fmt.Errorf("unable to get power usage: %v", nvml.ErrorString(ret))
+		}
+		currentPower := uint(power / 1000) // Convert milliwatts to watts
+		totalPower += currentPower
+		currentPowers = append(currentPowers, currentPower)
+
+		maxPowerLimit, ret := device.GetPowerManagementLimit()
+		if ret != nvml.SUCCESS {
+			return fmt.Errorf("unable to get power management limit: %v", nvml.ErrorString(ret))
+		}
+		maxPowerLimits = append(maxPowerLimits, uint(maxPowerLimit/1000)) // Convert milliwatts to watts
 	}
 
 	if totalPower > totalPowerCap {
-		log.Printf("Total power (%d W) exceeds the cap (%d W). Adjusting limits...", totalPower, totalPowerCap)
+		log.Printf("Total power consumption (%d W) exceeds the cap (%d W). Adjusting limits...", totalPower, totalPowerCap)
 
-		// Calculate the reduction factor
-		reductionFactor := float64(totalPowerCap) / float64(totalPower)
-
-		// Apply the reduction to each GPU
+		excessPower := totalPower - totalPowerCap
 		for i, device := range devices {
-			newLimit := uint(float64(currentPowerLimits[i]) * reductionFactor)
+			if currentPowers[i] == 0 {
+				continue // Skip GPUs that aren't consuming power
+			}
+
+			// Calculate how much this GPU should reduce its power
+			reductionRatio := float64(currentPowers[i]) / float64(totalPower)
+			reduction := uint(float64(excessPower) * reductionRatio)
+
+			// Ensure we don't reduce below zero
+			newLimit := maxPowerLimits[i]
+			if reduction < currentPowers[i] {
+				newLimit = currentPowers[i] - reduction
+			}
+
 			ret := device.SetPowerManagementLimit(uint32(newLimit * 1000)) // Convert watts to milliwatts
 			if ret != nvml.SUCCESS {
 				return fmt.Errorf("unable to set power management limit for GPU %d: %v", i, nvml.ErrorString(ret))
 			}
-			log.Printf("GPU %d power limit adjusted from %d W to %d W", i, currentPowerLimits[i], newLimit)
+			log.Printf("GPU %d power limit adjusted to %d W (current consumption: %d W)", i, newLimit, currentPowers[i])
 		}
 	} else if totalPower >= uint(float64(totalPowerCap)*0.98) && totalPower != lastTotalPower {
-		log.Printf("Warning: Total power (%d W) is approaching the cap (%d W)", totalPower, totalPowerCap)
+		log.Printf("Warning: Total power consumption (%d W) is approaching the cap (%d W)", totalPower, totalPowerCap)
+	} else {
+		// If we're well below the cap, restore original power limits
+		for i, device := range devices {
+			ret := device.SetPowerManagementLimit(uint32(maxPowerLimits[i] * 1000)) // Convert watts to milliwatts
+			if ret != nvml.SUCCESS {
+				return fmt.Errorf("unable to restore power management limit for GPU %d: %v", i, nvml.ErrorString(ret))
+			}
+		}
 	}
 
 	lastTotalPower = totalPower
@@ -138,7 +171,6 @@ func parseTempCheckInterval() {
 
 	tempCheckInterval = time.Duration(interval) * time.Second
 }
-
 func checkAndApplyPowerLimits() error {
 	if time.Since(lastTempCheckTime) < tempCheckInterval {
 		return nil
@@ -152,7 +184,6 @@ func checkAndApplyPowerLimits() error {
 	}
 
 	var devices []nvml.Device
-	var currentPowerLimits []uint
 
 	for i := 0; i < int(count); i++ {
 		device, ret := nvml.DeviceGetHandleByIndex(i)
@@ -160,13 +191,7 @@ func checkAndApplyPowerLimits() error {
 			return fmt.Errorf("unable to get device at index %d: %v", i, nvml.ErrorString(ret))
 		}
 
-		powerLimit, ret := device.GetPowerManagementLimit()
-		if ret != nvml.SUCCESS {
-			return fmt.Errorf("unable to get power management limit for GPU %d: %v", i, nvml.ErrorString(ret))
-		}
-
 		devices = append(devices, device)
-		currentPowerLimits = append(currentPowerLimits, uint(powerLimit/1000)) // Convert milliwatts to watts
 
 		// Only apply individual temperature-based limits if they are configured
 		if _, exists := gpuPowerLimits[i]; exists {
@@ -183,7 +208,7 @@ func checkAndApplyPowerLimits() error {
 	}
 
 	// Always apply total power cap if it's set, regardless of individual temperature limits
-	err := applyTotalPowerCap(devices, currentPowerLimits)
+	err := applyTotalPowerCap(devices)
 	if err != nil {
 		log.Printf("Warning: Failed to apply total power cap: %v", err)
 	}
