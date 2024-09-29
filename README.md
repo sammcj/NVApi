@@ -19,6 +19,7 @@ A lightweight API that returns Nvidia GPU utilisation information.
       - [Example Configuration](#example-configuration)
       - [Behaviour](#behaviour)
       - [Partial Configuration Behaviour](#partial-configuration-behaviour)
+      - [Total Power Cap Only Configuration](#total-power-cap-only-configuration)
     - [Home Assistant Integration](#home-assistant-integration)
   - [NVApi-Tray GUI](#nvapi-tray-gui)
   - [License](#license)
@@ -204,6 +205,23 @@ If you provide only some of the environment variables, the following behaviour a
 - The `GPU_TEMP_CHECK_INTERVAL` is a global setting. If not provided, it defaults to 5 seconds. This interval applies to all GPUs for which the feature is active.
 - The `GPU_TOTAL_POWER_CAP` is optional. If not provided, there will be no limit on the total power consumption of all GPUs combined.
 - You can activate the feature for some GPUs and not others by providing complete sets of variables for the desired GPUs only.
+
+#### Total Power Cap Only Configuration
+
+You can set a total power cap for all GPUs without specifying individual temperature-based limits. To do this, only set the `GPU_TOTAL_POWER_CAP` environment variable:
+
+```bash
+export GPU_TOTAL_POWER_CAP=400
+```
+
+In this configuration:
+
+1. The total power consumption of all GPUs combined will not exceed 400W.
+2. If the total power consumption approaches 98% of the cap, a warning will be logged.
+3. If the total power consumption exceeds the cap, the power limits of all GPUs will be proportionally reduced to meet the cap.
+4. Individual GPU temperature-based limits will not be applied unless they are explicitly configured.
+
+This allows for a simple way to limit total power consumption across all GPUs without needing to configure individual temperature-based limits for each GPU.
 
 ### Home Assistant Integration
 

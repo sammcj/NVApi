@@ -89,7 +89,6 @@ func parseTotalPowerCap() {
 	totalPowerCap = uint(cap)
 }
 
-
 func applyTotalPowerCap(devices []nvml.Device, currentPowerLimits []uint) error {
 	if totalPowerCap == 0 {
 		return nil // Total power cap is disabled
@@ -191,7 +190,6 @@ func checkAndApplyPowerLimits() error {
 
 	return nil
 }
-
 
 func (rl *rateLimiter) takeToken() bool {
 	rl.mu.Lock()
