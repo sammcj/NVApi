@@ -20,19 +20,20 @@ import (
 const version = "1.3.2"
 
 type GPUInfo struct {
-	Index              uint          `json:"index"`
-	Name               string        `json:"name"`
-	GPUUtilisation     uint          `json:"gpu_utilisation"`
-	MemoryUtilisation  uint          `json:"memory_utilisation"`
-	PowerWatts         uint          `json:"power_watts"`
-	PowerLimitWatts    uint          `json:"power_limit_watts"`
-	MemoryTotal        float64       `json:"memory_total_gb"`
-	MemoryUsed         float64       `json:"memory_used_gb"`
-	MemoryFree         float64       `json:"memory_free_gb"`
-	MemoryUsagePercent int           `json:"memory_usage_percent"`
-	Temperature        uint          `json:"temperature"`
+	Index              uint    `json:"index"`
+	Name               string  `json:"name"`
+	GPUUtilisation     uint    `json:"gpu_utilisation"`
+	MemoryUtilisation  uint    `json:"memory_utilisation"`
+	PowerWatts         uint    `json:"power_watts"`
+	PowerLimitWatts    uint    `json:"power_limit_watts"`
+	MemoryTotal        float64 `json:"memory_total_gb"`
+	MemoryUsed         float64 `json:"memory_used_gb"`
+	MemoryFree         float64 `json:"memory_free_gb"`
+	MemoryUsagePercent int     `json:"memory_usage_percent"`
+	Temperature        uint    `json:"temperature"`
 	// FanSpeed           *uint         `json:"fan_speed,omitempty"`
-	Processes          []ProcessInfo `json:"processes"`
+	Processes     []ProcessInfo `json:"processes"`
+	PCIeLinkState string        `json:"pcie_link_state"`
 }
 
 type ProcessInfo struct {
@@ -67,16 +68,18 @@ type GPUCapabilities struct {
 }
 
 var (
-	port              = flag.Int("port", 9999, "Port to listen on")
-	rate              = flag.Int("rate", 3, "Minimum number of seconds between requests")
-	debug             = flag.Bool("debug", false, "Print debug logs to the console")
-	help              = flag.Bool("help", false, "Print this help")
-	gpuPowerLimits    map[int]TempPowerLimits
-	tempCheckInterval time.Duration
-	lastTempCheckTime time.Time
-	totalPowerCap     uint
-	lastTotalPower    uint
-	gpuCapabilities   []GPUCapabilities
+	port                      = flag.Int("port", 9999, "Port to listen on")
+	rate                      = flag.Int("rate", 3, "Minimum number of seconds between requests")
+	debug                     = flag.Bool("debug", false, "Print debug logs to the console")
+	help                      = flag.Bool("help", false, "Print this help")
+	gpuPowerLimits            map[int]TempPowerLimits
+	tempCheckInterval         time.Duration
+	lastTempCheckTime         time.Time
+	totalPowerCap             uint
+	lastTotalPower            uint
+	enablePCIeStateManagement = flag.Bool("enable-pcie-state-management", false, "Enable automatic PCIe link state management")
+	pcieStateManager          *PCIeStateManager
+	// gpuCapabilities   []GPUCapabilities
 )
 
 // Initialise GPU capabilities
@@ -527,6 +530,21 @@ func GetGPUInfo() ([]GPUInfo, error) {
 		memoryFree := float64(memory.Free) / 1024 / 1024 / 1024
 		memoryUsagePercent := int(math.Round((float64(memory.Used) / float64(memory.Total)) * 100))
 
+		devices := make([]nvml.Device, count)
+		for i := 0; i < int(count); i++ {
+			device, ret := nvml.DeviceGetHandleByIndex(i)
+			if ret != nvml.SUCCESS {
+				log.Fatalf("unable to get device at index %d: %v", i, nvml.ErrorString(ret))
+			}
+			devices[i] = device
+		}
+		pcieStateManager = NewPCIeStateManager(devices)
+		pcieLinkState, err := pcieStateManager.GetCurrentLinkState(i)
+		if err != nil {
+			log.Printf("Warning: Failed to get PCIe link state for GPU %d: %v", i, err)
+			pcieLinkState = "unknown"
+		}
+
 		gpuInfo := GPUInfo{
 			Index:              uint(index),
 			Name:               name,
@@ -538,9 +556,10 @@ func GetGPUInfo() ([]GPUInfo, error) {
 			MemoryUsagePercent: memoryUsagePercent,
 			Temperature:        uint(temperature),
 			// FanSpeed:           fanSpeed,
-			PowerWatts:         uint(math.Round(float64(power) / 1000)),
-			PowerLimitWatts:    uint(math.Round(float64(powerLimitWatts) / 1000)),
-			Processes:          processesInfo,
+			PowerWatts:      uint(math.Round(float64(power) / 1000)),
+			PowerLimitWatts: uint(math.Round(float64(powerLimitWatts) / 1000)),
+			Processes:       processesInfo,
+			PCIeLinkState:   pcieLinkState,
 		}
 
 		gpuInfos[i] = gpuInfo
@@ -586,6 +605,19 @@ func main() {
 	// 	log.Fatalf("Failed to initialise GPU capabilities: %v", err)
 	// }
 
+	// Initialise PCIeStateManager
+	if *enablePCIeStateManagement {
+		devices := make([]nvml.Device, count)
+		for i := 0; i < int(count); i++ {
+			device, ret := nvml.DeviceGetHandleByIndex(i)
+			if ret != nvml.SUCCESS {
+				log.Fatalf("unable to get device at index %d: %v", i, nvml.ErrorString(ret))
+			}
+			devices[i] = device
+		}
+		pcieStateManager = NewPCIeStateManager(devices)
+	}
+
 	// Print any configured power limits
 	for i, limits := range gpuPowerLimits {
 		log.Printf("GPU %d power limits: LowTemp: %d, LowTempLimit: %d W, MediumTemp: %d, MediumTempLimit: %d W, HighTempLimit: %d W",
@@ -629,6 +661,8 @@ func main() {
 				rl.mu.Lock()
 				*rl.cache = gpuInfos
 				rl.mu.Unlock()
+
+				pcieStateManager.UpdateUtilization()
 			}
 			time.Sleep(time.Duration(*rate) * time.Second)
 		}
@@ -669,8 +703,8 @@ func main() {
 			"/gpu/memory_usage_percent": func(gpuInfo *GPUInfo) interface{} { return gpuInfo.MemoryUsagePercent },
 			"/gpu/temperature":          func(gpuInfo *GPUInfo) interface{} { return gpuInfo.Temperature },
 			// "/gpu/fan_speed":            func(gpuInfo *GPUInfo) interface{} { return gpuInfo.FanSpeed },
-			"/gpu/all":                  func(gpuInfo *GPUInfo) interface{} { return gpuInfo },
-			"/gpu/processes":            func(gpuInfo *GPUInfo) interface{} { return gpuInfo.Processes },
+			"/gpu/all":       func(gpuInfo *GPUInfo) interface{} { return gpuInfo },
+			"/gpu/processes": func(gpuInfo *GPUInfo) interface{} { return gpuInfo.Processes },
 		}
 
 		if *debug {
