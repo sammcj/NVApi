@@ -31,7 +31,7 @@ type GPUInfo struct {
 	MemoryFree         float64       `json:"memory_free_gb"`
 	MemoryUsagePercent int           `json:"memory_usage_percent"`
 	Temperature        uint          `json:"temperature"`
-	FanSpeed           *uint         `json:"fan_speed,omitempty"`
+	// FanSpeed           *uint         `json:"fan_speed,omitempty"`
 	Processes          []ProcessInfo `json:"processes"`
 }
 
@@ -77,42 +77,41 @@ var (
 	totalPowerCap     uint
 	lastTotalPower    uint
 	gpuCapabilities   []GPUCapabilities
-	disableFanSpeed bool
 )
 
 // Initialise GPU capabilities
-func initialiseGPUCapabilities() error {
-	count, ret := nvml.DeviceGetCount()
-	if ret != nvml.SUCCESS {
-		return fmt.Errorf("unable to get device count: %v", nvml.ErrorString(ret))
-	}
+// func initialiseGPUCapabilities() error {
+// 	count, ret := nvml.DeviceGetCount()
+// 	if ret != nvml.SUCCESS {
+// 		return fmt.Errorf("unable to get device count: %v", nvml.ErrorString(ret))
+// 	}
 
-	gpuCapabilities = make([]GPUCapabilities, count)
+// 	gpuCapabilities = make([]GPUCapabilities, count)
 
-	for i := 0; i < int(count); i++ {
-		device, ret := nvml.DeviceGetHandleByIndex(i)
-		if ret != nvml.SUCCESS {
-			return fmt.Errorf("unable to get device at index %d: %v", i, nvml.ErrorString(ret))
-		}
+// 	for i := 0; i < int(count); i++ {
+// 		device, ret := nvml.DeviceGetHandleByIndex(i)
+// 		if ret != nvml.SUCCESS {
+// 			return fmt.Errorf("unable to get device at index %d: %v", i, nvml.ErrorString(ret))
+// 		}
 
-		// Check if fan speed sensor is available
-		_, ret = device.GetFanSpeed()
-		gpuCapabilities[i].HasFanSpeedSensor = (ret == nvml.SUCCESS)
+// 		// Check if fan speed sensor is available
+// 		_, ret = device.GetFanSpeed()
+// 		gpuCapabilities[i].HasFanSpeedSensor = (ret == nvml.SUCCESS)
 
-		// If we have a sensor, check if we can actually read from it
-		if gpuCapabilities[i].HasFanSpeedSensor {
-			speed, ret := device.GetFanSpeed()
-			gpuCapabilities[i].FanSpeedSupported = (ret == nvml.SUCCESS && speed != 0)
-		}
+// 		// If we have a sensor, check if we can actually read from it
+// 		if gpuCapabilities[i].HasFanSpeedSensor {
+// 			speed, ret := device.GetFanSpeed()
+// 			gpuCapabilities[i].FanSpeedSupported = (ret == nvml.SUCCESS && speed != 0)
+// 		}
 
-		if *debug {
-			log.Printf("GPU %d - Has Fan Sensor: %v, Fan Speed Supported: %v",
-				i, gpuCapabilities[i].HasFanSpeedSensor, gpuCapabilities[i].FanSpeedSupported)
-		}
-	}
+// 		if *debug {
+// 			log.Printf("GPU %d - Has Fan Sensor: %v, Fan Speed Supported: %v",
+// 				i, gpuCapabilities[i].HasFanSpeedSensor, gpuCapabilities[i].FanSpeedSupported)
+// 		}
+// 	}
 
-	return nil
-}
+// 	return nil
+// }
 
 // getGPUUUID retrieves the UUID for a given GPU device
 func getGPUUUID(device nvml.Device) (string, error) {
@@ -490,19 +489,19 @@ func GetGPUInfo() ([]GPUInfo, error) {
 			log.Printf("Warning: Failed to apply power limit for GPU %d: %v", i, err)
 		}
 
-		var fanSpeed *uint
-		if !disableFanSpeed && gpuCapabilities[i].FanSpeedSupported {
-			speed, ret := device.GetFanSpeed()
-			if ret == nvml.SUCCESS {
-				fanSpeedUint := uint(speed)
-				fanSpeed = &fanSpeedUint
-			} else {
-				// Log the issue but don't return an error
-				if *debug {
-					log.Printf("Warning: Failed to get fan speed for GPU %d: %v", i, nvml.ErrorString(ret))
-				}
-			}
-		}
+		// var fanSpeed *uint
+		// if !disableFanSpeed && gpuCapabilities[i].FanSpeedSupported {
+		// 	speed, ret := device.GetFanSpeed()
+		// 	if ret == nvml.SUCCESS {
+		// 		fanSpeedUint := uint(speed)
+		// 		fanSpeed = &fanSpeedUint
+		// 	} else {
+		// 		// Log the issue but don't return an error
+		// 		if *debug {
+		// 			log.Printf("Warning: Failed to get fan speed for GPU %d: %v", i, nvml.ErrorString(ret))
+		// 		}
+		// 	}
+		// }
 
 		processes, ret := nvml.DeviceGetComputeRunningProcesses(device)
 		if ret != nvml.SUCCESS {
@@ -538,7 +537,7 @@ func GetGPUInfo() ([]GPUInfo, error) {
 			MemoryFree:         math.Round(memoryFree*100) / 100,
 			MemoryUsagePercent: memoryUsagePercent,
 			Temperature:        uint(temperature),
-			FanSpeed:           fanSpeed,
+			// FanSpeed:           fanSpeed,
 			PowerWatts:         uint(math.Round(float64(power) / 1000)),
 			PowerLimitWatts:    uint(math.Round(float64(powerLimitWatts) / 1000)),
 			Processes:          processesInfo,
@@ -582,13 +581,10 @@ func main() {
 		return
 	}
 
-	disableFanSpeedStr := os.Getenv("DISABLE_FAN_SPEED")
-	disableFanSpeed, _ = strconv.ParseBool(disableFanSpeedStr)
-
 	// Initialise GPU capabilities
-	if err := initialiseGPUCapabilities(); err != nil {
-		log.Fatalf("Failed to initialise GPU capabilities: %v", err)
-	}
+	// if err := initialiseGPUCapabilities(); err != nil {
+	// 	log.Fatalf("Failed to initialise GPU capabilities: %v", err)
+	// }
 
 	// Print any configured power limits
 	for i, limits := range gpuPowerLimits {
@@ -672,12 +668,7 @@ func main() {
 			"/gpu/memory_free_gb":       func(gpuInfo *GPUInfo) interface{} { return gpuInfo.MemoryFree },
 			"/gpu/memory_usage_percent": func(gpuInfo *GPUInfo) interface{} { return gpuInfo.MemoryUsagePercent },
 			"/gpu/temperature":          func(gpuInfo *GPUInfo) interface{} { return gpuInfo.Temperature },
-			"/gpu/fan_speed": func(gpuInfo *GPUInfo) interface{} {
-				if disableFanSpeed {
-						return nil
-				}
-				return gpuInfo.FanSpeed
-			},
+			// "/gpu/fan_speed":            func(gpuInfo *GPUInfo) interface{} { return gpuInfo.FanSpeed },
 			"/gpu/all":                  func(gpuInfo *GPUInfo) interface{} { return gpuInfo },
 			"/gpu/processes":            func(gpuInfo *GPUInfo) interface{} { return gpuInfo.Processes },
 		}
