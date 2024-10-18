@@ -56,8 +56,8 @@ Returns the current GPU utilisation information in JSON format.
 
 ## Query Parameters
 
-* `port`: The port number to listen on (default: 9999)
-* `rate`: The minimum number of seconds between requests (default: 3)
+- `port`: The port number to listen on (default: 9999)
+- `rate`: The minimum number of seconds between requests (default: 3)
 
 ## Example Response
 
