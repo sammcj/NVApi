@@ -584,12 +584,9 @@ func GetGPUInfo() ([]GPUInfo, error) {
 			}
 			devices[i] = device
 		}
-		pcieStateManager = NewPCIeStateManager(devices)
-		pcieLinkState, err := pcieStateManager.GetCurrentLinkState(i)
-		if err != nil {
-			log.Printf("Warning: Failed to get PCIe link state for GPU %d: %v", i, err)
-			pcieLinkState = "unknown"
-		}
+		pcieStateManager := NewPCIeStateManager(devices)
+		pcieStateManager.Start()
+		defer pcieStateManager.Stop()
 
 		gpuInfo := GPUInfo{
 			Index:              uint(index),
@@ -605,7 +602,6 @@ func GetGPUInfo() ([]GPUInfo, error) {
 			PowerWatts:      uint(math.Round(float64(power) / 1000)),
 			PowerLimitWatts: uint(math.Round(float64(powerLimitWatts) / 1000)),
 			Processes:       processesInfo,
-			PCIeLinkState:   pcieLinkState,
 		}
 
 		gpuInfos[i] = gpuInfo
@@ -797,6 +793,12 @@ func NewPCIeStateManager(devices []nvml.Device) *PCIeStateManager {
 		stopChan:           make(chan struct{}),
 	}
 	manager.loadConfigurations()
+
+	// Initialise utilization history for each GPU
+	for i := range devices {
+		manager.utilisationHistory[i] = make([]float64, 0, manager.configs[i].IdleThresholdSeconds)
+	}
+
 	return manager
 }
 
@@ -977,9 +979,12 @@ func (m *PCIeStateManager) UpdateUtilisation() {
 			continue
 		}
 
+		// Append new utilization data
 		m.utilisationHistory[i] = append(m.utilisationHistory[i], float64(usage.Gpu))
+
+		// Trim history if it exceeds the threshold
 		if len(m.utilisationHistory[i]) > m.configs[i].IdleThresholdSeconds {
-			m.utilisationHistory[i] = m.utilisationHistory[i][1:]
+			m.utilisationHistory[i] = m.utilisationHistory[i][len(m.utilisationHistory[i])-m.configs[i].IdleThresholdSeconds:]
 		}
 
 		log.Printf("GPU %d utilization: %.2f%% (History length: %d)", i, float64(usage.Gpu), len(m.utilisationHistory[i]))
