@@ -377,7 +377,9 @@ func parseTempPowerLimits() error {
 			key = strings.TrimSuffix(key, "_MEDIUM_TEMP_LIMIT")
 			key = strings.TrimSuffix(key, "_HIGH_TEMP_LIMIT")
 
-			log.Printf("Debug: Processing key: %s", key)
+			if *debug {
+				log.Printf("Debug: Processing key: %s", key)
+			}
 
 			var index string
 			if strings.Contains(key, "-") {
@@ -393,7 +395,9 @@ func parseTempPowerLimits() error {
 				index = key
 			}
 
-			log.Printf("Debug: Resolved index: %s", index)
+			if *debug {
+				log.Printf("Debug: Resolved index: %s", index)
+			}
 
 			// Use the key to construct environment variable names
 			lowTempEnv := fmt.Sprintf("GPU_%s_LOW_TEMP", key)
@@ -408,7 +412,9 @@ func parseTempPowerLimits() error {
 			}
 
 			mediumTempStr := os.Getenv(mediumTempEnv)
-			log.Printf("Debug: Looking for MEDIUM_TEMP with key: %s, value: %s", mediumTempEnv, mediumTempStr)
+			if *debug {
+				log.Printf("Debug: Looking for MEDIUM_TEMP with key: %s, value: %s", mediumTempEnv, mediumTempStr)
+			}
 
 			mediumTemp, err := strconv.Atoi(mediumTempStr)
 			if err != nil {
@@ -435,7 +441,9 @@ func parseTempPowerLimits() error {
 				return fmt.Errorf("invalid GPU index %s: %v", index, err)
 			}
 
-			log.Printf("Debug: Successfully parsed all values for GPU %s", key)
+			if *debug {
+				log.Printf("Debug: Successfully parsed all values for GPU %s", key)
+			}
 
 			gpuPowerLimits[idx] = TempPowerLimits{
 				LowTemp:         lowTemp,
