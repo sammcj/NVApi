@@ -1,6 +1,6 @@
 # NVApi
 
-A lightweight API that returns Nvidia GPU utilisation information.
+A lightweight API that returns Nvidia GPU utilisation information and allows for automated power limiting based on temperature and total power consumption.
 
 ![](screenshots/json_response.png)
 
@@ -20,6 +20,7 @@ A lightweight API that returns Nvidia GPU utilisation information.
       - [Behaviour](#behaviour)
       - [Partial Configuration Behaviour](#partial-configuration-behaviour)
       - [Total Power Cap Only Configuration](#total-power-cap-only-configuration)
+    - [PCIe Link Speed](#pcie-link-speed)
     - [Home Assistant Integration](#home-assistant-integration)
   - [NVApi-Tray GUI](#nvapi-tray-gui)
   - [License](#license)
@@ -56,8 +57,8 @@ Returns the current GPU utilisation information in JSON format.
 
 ## Query Parameters
 
-* `port`: The port number to listen on (default: 9999)
-* `rate`: The minimum number of seconds between requests (default: 3)
+- `port`: The port number to listen on (default: 9999)
+- `rate`: The minimum number of seconds between requests (default: 3)
 
 ## Example Response
 
@@ -173,7 +174,7 @@ services:
       - 9999:9999
     environment:
       GPU_TEMP_CHECK_INTERVAL: 5
-      GPU_TOTAL_POWER_CAP: 400
+      GPU_TOTAL_POWER_CAP: 600
       GPU_0_LOW_TEMP: 50
       GPU_0_MEDIUM_TEMP: 80
       GPU_0_LOW_TEMP_LIMIT: 370
@@ -186,6 +187,22 @@ services:
       GPU_1_HIGH_TEMP_LIMIT: 100
     cap_add:
       - SYS_ADMIN # grant permissions to set power limits
+```
+
+You may alternatively use the GPU UUID instead of the index, e.g:
+
+```shell
+nvidia-smi -L
+GPU 0: Tesla P100-PCIE-16GB (UUID: GPU-14b70e9a-19a8-bc20-fd3e-0f3a1430dc24)
+GPU 1: NVIDIA RTX A4000 (UUID: GPU-389accfb-8815-6341-b1cc-82d6189527a0)
+GPU 2: NVIDIA RTX A4000 (UUID: GPU-fe0fb526-0f88-bb80-4207-051194e573b2)
+```
+
+```yaml
+GPU_GPU-14b70e9a-19a8-bc20-fd3e-0f3a1430dc24_LOW_TEMP: 80
+GPU_GPU-14b70e9a-19a8-bc20-fd3e-0f3a1430dc24_MEDIUM_TEMP: 84
+GPU_GPU-14b70e9a-19a8-bc20-fd3e-0f3a1430dc24_LOW_TEMP_LIMIT: 140
+GPU_GPU-14b70e9a-19a8-bc20-fd3e-0f3a1430dc24_MEDIUM_TEMP_LIMIT: 120
 ```
 
 #### Behaviour
@@ -225,6 +242,24 @@ export GPU_TOTAL_POWER_CAP=400
 4. If the total power consumption approaches 98% of the cap, a warning is logged.
 
 This approach ensures that the total power cap is respected while allowing for flexible and efficient use of available power across all GPUs.
+
+### PCIe Link Speed
+
+NVApi has the ability to set minimum and maximum PCIe speeds for each GPU.
+The idle time threshold before changing the PCIe link speed is configurable per GPU using environment variables.
+
+Global configuration:
+
+- `GPU_PCIE_MANAGEMENT_ENABLED=true` to enable management for all GPUs.
+- `GPU_PCIE_IDLE_THRESHOLD=30` to set a global 30-second idle threshold for all GPUs.
+- `GPU_PCIE_MIN_SPEED=1` and `GPU_PCIE_MAX_SPEED=5` to set global min and max PCIe speeds.
+
+Per-GPU configuration:
+
+`GPU_0_PCIE_MANAGEMENT_ENABLED=true` enables management for GPU 0.
+`GPU_0_PCIE_IDLE_THRESHOLD=45` sets a 45-second idle threshold for GPU 0.
+`GPU_0_PCIE_MIN_SPEED=2` sets the minimum PCIe speed for GPU 0 to 2.
+`GPU_0_PCIE_MAX_SPEED=4` sets the maximum PCIe speed for GPU 0 to 4.
 
 ### Home Assistant Integration
 
