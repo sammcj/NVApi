@@ -495,6 +495,9 @@ func GetGPUInfo() ([]GPUInfo, error) {
 			if ret == nvml.SUCCESS {
 				fanSpeedUint := uint(speed)
 				fanSpeed = &fanSpeedUint
+			} else {
+				// Log the issue but don't return an error
+				log.Printf("Warning: Failed to get fan speed for GPU %d: %v", i, nvml.ErrorString(ret))
 			}
 		}
 
