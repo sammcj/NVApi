@@ -658,6 +658,7 @@ func main() {
 	// }
 
 	// Initialise PCIeStateManager
+	var pcieStateManagerInitialized bool
 	if *enablePCIeStateManagement {
 		devices := make([]nvml.Device, count)
 		for i := 0; i < int(count); i++ {
@@ -670,6 +671,7 @@ func main() {
 		pcieStateManager = NewPCIeStateManager(devices)
 		pcieStateManager.Start()
 		defer pcieStateManager.Stop()
+		pcieStateManagerInitialized = true
 	}
 
 	// Print any configured power limits
@@ -716,7 +718,9 @@ func main() {
 				*rl.cache = gpuInfos
 				rl.mu.Unlock()
 
-				pcieStateManager.UpdateUtilisation()
+				if pcieStateManagerInitialized {
+					pcieStateManager.UpdateUtilisation()
+				}
 			}
 			time.Sleep(time.Duration(*rate) * time.Second)
 		}
