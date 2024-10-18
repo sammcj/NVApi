@@ -662,7 +662,7 @@ func main() {
 				*rl.cache = gpuInfos
 				rl.mu.Unlock()
 
-				pcieStateManager.UpdateUtilization()
+				pcieStateManager.UpdateUtilisation()
 			}
 			time.Sleep(time.Duration(*rate) * time.Second)
 		}

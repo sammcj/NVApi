@@ -20,6 +20,7 @@ A lightweight API that returns Nvidia GPU utilisation information.
       - [Behaviour](#behaviour)
       - [Partial Configuration Behaviour](#partial-configuration-behaviour)
       - [Total Power Cap Only Configuration](#total-power-cap-only-configuration)
+    - [PCIe Link Speed](#pcie-link-speed)
     - [Home Assistant Integration](#home-assistant-integration)
   - [NVApi-Tray GUI](#nvapi-tray-gui)
   - [License](#license)
@@ -234,6 +235,24 @@ export GPU_TOTAL_POWER_CAP=400
 4. If the total power consumption approaches 98% of the cap, a warning is logged.
 
 This approach ensures that the total power cap is respected while allowing for flexible and efficient use of available power across all GPUs.
+
+### PCIe Link Speed
+
+NVApi has the ability to set minimum and maximum PCIe speeds for each GPU.
+The idle time threshold before changing the PCIe link speed is configurable per GPU using environment variables.
+
+Global configuration:
+
+- `GPU_PCIE_MANAGEMENT_ENABLED=true` to enable management for all GPUs.
+- `GPU_PCIE_IDLE_THRESHOLD=30` to set a global 30-second idle threshold for all GPUs.
+- `GPU_PCIE_MIN_SPEED=1` and `GPU_PCIE_MAX_SPEED=5` to set global min and max PCIe speeds.
+
+Per-GPU configuration:
+
+`GPU_0_PCIE_MANAGEMENT_ENABLED=true` enables management for GPU 0.
+`GPU_0_PCIE_IDLE_THRESHOLD=45` sets a 45-second idle threshold for GPU 0.
+`GPU_0_PCIE_MIN_SPEED=2` sets the minimum PCIe speed for GPU 0 to 2.
+`GPU_0_PCIE_MAX_SPEED=4` sets the maximum PCIe speed for GPU 0 to 4.
 
 ### Home Assistant Integration
 
