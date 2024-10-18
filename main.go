@@ -63,6 +63,7 @@ type TempPowerLimits struct {
 // Track GPU capabilities
 type GPUCapabilities struct {
 	HasFanSpeedSensor bool
+	FanSpeedSupported bool
 }
 
 var (
@@ -97,8 +98,15 @@ func initialiseGPUCapabilities() error {
 		_, ret = device.GetFanSpeed()
 		gpuCapabilities[i].HasFanSpeedSensor = (ret == nvml.SUCCESS)
 
-		if !gpuCapabilities[i].HasFanSpeedSensor {
-			log.Printf("GPU %d does not have a fan speed sensor", i)
+		// If we have a sensor, check if we can actually read from it
+		if gpuCapabilities[i].HasFanSpeedSensor {
+			speed, ret := device.GetFanSpeed()
+			gpuCapabilities[i].FanSpeedSupported = (ret == nvml.SUCCESS && speed != 0)
+		}
+
+		if *debug {
+			log.Printf("GPU %d - Has Fan Sensor: %v, Fan Speed Supported: %v",
+				i, gpuCapabilities[i].HasFanSpeedSensor, gpuCapabilities[i].FanSpeedSupported)
 		}
 	}
 
@@ -482,13 +490,11 @@ func GetGPUInfo() ([]GPUInfo, error) {
 		}
 
 		var fanSpeed *uint
-		if gpuCapabilities[i].HasFanSpeedSensor {
+		if gpuCapabilities[i].FanSpeedSupported {
 			speed, ret := device.GetFanSpeed()
 			if ret == nvml.SUCCESS {
 				fanSpeedUint := uint(speed)
 				fanSpeed = &fanSpeedUint
-			} else {
-				log.Printf("Warning: Failed to get fan speed for GPU %d: %v", i, nvml.ErrorString(ret))
 			}
 		}
 
