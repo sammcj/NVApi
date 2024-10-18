@@ -449,7 +449,9 @@ func GetGPUInfo() ([]GPUInfo, error) {
 
 		fanSpeed, ret := device.GetFanSpeed()
 		if ret != nvml.SUCCESS {
-			return nil, fmt.Errorf("unable to get fan speed: %v", nvml.ErrorString(ret))
+			// return nil, fmt.Errorf("unable to get fan speed: %v", nvml.ErrorString(ret))
+			// return nil, but it shouldn't be an error
+			return nil, nil
 		}
 
 		processes, ret := nvml.DeviceGetComputeRunningProcesses(device)
