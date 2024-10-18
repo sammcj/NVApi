@@ -620,7 +620,10 @@ func main() {
 		for {
 			gpuInfos, err := GetGPUInfo()
 			if err != nil {
-				log.Printf("Error updating GPU info: %v", err)
+				// Only log errors that are not related to fan speed
+				if !strings.Contains(err.Error(), "fan speed") {
+					log.Printf("Error updating GPU info: %v", err)
+				}
 			} else {
 				rl.mu.Lock()
 				*rl.cache = gpuInfos
