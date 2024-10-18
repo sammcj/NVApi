@@ -491,13 +491,18 @@ func GetGPUInfo() ([]GPUInfo, error) {
 
 		var fanSpeed *uint
 		if gpuCapabilities[i].FanSpeedSupported {
+			if *debug {
+				log.Printf("Attempting to read fan speed for GPU %d", i)
+			}
 			speed, ret := device.GetFanSpeed()
 			if ret == nvml.SUCCESS {
 				fanSpeedUint := uint(speed)
 				fanSpeed = &fanSpeedUint
 			} else {
 				// Log the issue but don't return an error
-				log.Printf("Warning: Failed to get fan speed for GPU %d: %v", i, nvml.ErrorString(ret))
+				if *debug {
+					log.Printf("Warning: Failed to get fan speed for GPU %d: %v", i, nvml.ErrorString(ret))
+				}
 			}
 		}
 
@@ -620,7 +625,6 @@ func main() {
 		for {
 			gpuInfos, err := GetGPUInfo()
 			if err != nil {
-				// Only log errors that are not related to fan speed
 				if !strings.Contains(err.Error(), "fan speed") {
 					log.Printf("Error updating GPU info: %v", err)
 				}
