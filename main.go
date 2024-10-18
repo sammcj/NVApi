@@ -86,6 +86,7 @@ type PCIeStateManager struct {
 	lastChangeTime     map[int]time.Time
 	configs            map[int]*PCIeConfig
 	mutex              sync.RWMutex
+	lastUpdateTime     time.Time
 }
 
 var (
@@ -941,6 +942,14 @@ func (m *PCIeStateManager) UpdateUtilisation() {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
+	now := time.Now()
+	if m.lastUpdateTime.IsZero() {
+		m.lastUpdateTime = now
+	}
+
+	elapsedSeconds := int(now.Sub(m.lastUpdateTime).Seconds())
+	m.lastUpdateTime = now
+
 	for i, device := range m.devices {
 		if !m.configs[i].Enabled {
 			continue
@@ -952,12 +961,21 @@ func (m *PCIeStateManager) UpdateUtilisation() {
 			continue
 		}
 
+		// Add current utilization to history
 		m.utilisationHistory[i] = append(m.utilisationHistory[i], float64(usage.Gpu))
-		if len(m.utilisationHistory[i]) > m.configs[i].IdleThresholdSeconds {
-			m.utilisationHistory[i] = m.utilisationHistory[i][1:]
+
+		// Pad history with zeros if more than 1 second has passed since last update
+		if elapsedSeconds > 1 {
+			padding := make([]float64, elapsedSeconds-1)
+			m.utilisationHistory[i] = append(m.utilisationHistory[i], padding...)
 		}
 
-		log.Printf("GPU %d utilization: %.2f%%", i, float64(usage.Gpu))
+		// Trim history to match idle threshold
+		if len(m.utilisationHistory[i]) > m.configs[i].IdleThresholdSeconds {
+			m.utilisationHistory[i] = m.utilisationHistory[i][len(m.utilisationHistory[i])-m.configs[i].IdleThresholdSeconds:]
+		}
+
+		log.Printf("GPU %d utilization: %.2f%% (History length: %d)", i, float64(usage.Gpu), len(m.utilisationHistory[i]))
 
 		if m.shouldChangeLinkSpeed(i) {
 			err := m.changeLinkSpeed(i, device)
@@ -978,20 +996,25 @@ func (m *PCIeStateManager) shouldChangeLinkSpeed(index int) bool {
 		return false
 	}
 
+	isIdle := true
 	for _, util := range history {
 		if util >= 1.0 {
-			log.Printf("GPU %d: Utilization above threshold (%.2f%%), not changing link speed", index, util)
-			return false
+			isIdle = false
+			break
 		}
 	}
 
-	lastChange, exists := m.lastChangeTime[index]
-	if !exists || time.Since(lastChange) >= 5*time.Minute {
-		log.Printf("GPU %d: Conditions met to change link speed", index)
-		return true
+	if isIdle {
+		lastChange, exists := m.lastChangeTime[index]
+		if !exists || time.Since(lastChange) >= 5*time.Minute {
+			log.Printf("GPU %d: Conditions met to change link speed (idle for %d seconds)", index, config.IdleThresholdSeconds)
+			return true
+		}
+		log.Printf("GPU %d: Idle, but too soon since last change (%.2f minutes ago)", index, time.Since(lastChange).Minutes())
+	} else {
+		log.Printf("GPU %d: Not idle (utilization above threshold in last %d seconds)", index, config.IdleThresholdSeconds)
 	}
 
-	log.Printf("GPU %d: Too soon since last change (%.2f minutes ago)", index, time.Since(lastChange).Minutes())
 	return false
 }
 
