@@ -1,6 +1,6 @@
 # NVApi
 
-A lightweight API that returns Nvidia GPU utilisation information.
+A lightweight API that returns Nvidia GPU utilisation information and allows for automated power limiting based on temperature and total power consumption.
 
 ![](screenshots/json_response.png)
 
