@@ -77,6 +77,7 @@ var (
 	totalPowerCap     uint
 	lastTotalPower    uint
 	gpuCapabilities   []GPUCapabilities
+	disableFanSpeed bool
 )
 
 // Initialise GPU capabilities
@@ -490,10 +491,7 @@ func GetGPUInfo() ([]GPUInfo, error) {
 		}
 
 		var fanSpeed *uint
-		if gpuCapabilities[i].FanSpeedSupported {
-			if *debug {
-				log.Printf("Attempting to read fan speed for GPU %d", i)
-			}
+		if !disableFanSpeed && gpuCapabilities[i].FanSpeedSupported {
 			speed, ret := device.GetFanSpeed()
 			if ret == nvml.SUCCESS {
 				fanSpeedUint := uint(speed)
@@ -584,6 +582,9 @@ func main() {
 		return
 	}
 
+	disableFanSpeedStr := os.Getenv("DISABLE_FAN_SPEED")
+	disableFanSpeed, _ = strconv.ParseBool(disableFanSpeedStr)
+
 	// Initialise GPU capabilities
 	if err := initialiseGPUCapabilities(); err != nil {
 		log.Fatalf("Failed to initialise GPU capabilities: %v", err)
@@ -671,7 +672,12 @@ func main() {
 			"/gpu/memory_free_gb":       func(gpuInfo *GPUInfo) interface{} { return gpuInfo.MemoryFree },
 			"/gpu/memory_usage_percent": func(gpuInfo *GPUInfo) interface{} { return gpuInfo.MemoryUsagePercent },
 			"/gpu/temperature":          func(gpuInfo *GPUInfo) interface{} { return gpuInfo.Temperature },
-			"/gpu/fan_speed":            func(gpuInfo *GPUInfo) interface{} { return gpuInfo.FanSpeed },
+			"/gpu/fan_speed": func(gpuInfo *GPUInfo) interface{} {
+				if disableFanSpeed {
+						return nil
+				}
+				return gpuInfo.FanSpeed
+			},
 			"/gpu/all":                  func(gpuInfo *GPUInfo) interface{} { return gpuInfo },
 			"/gpu/processes":            func(gpuInfo *GPUInfo) interface{} { return gpuInfo.Processes },
 		}
