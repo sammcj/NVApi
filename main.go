@@ -584,9 +584,11 @@ func GetGPUInfo() ([]GPUInfo, error) {
 			}
 			devices[i] = device
 		}
-		pcieStateManager := NewPCIeStateManager(devices)
-		pcieStateManager.Start()
-		defer pcieStateManager.Stop()
+		pcieLinkState, err := pcieStateManager.GetCurrentLinkState(i)
+		if err != nil {
+			log.Printf("Warning: Failed to get PCIe link state for GPU %d: %v", i, err)
+			pcieLinkState = "unknown"
+		}
 
 		gpuInfo := GPUInfo{
 			Index:              uint(index),
@@ -602,6 +604,7 @@ func GetGPUInfo() ([]GPUInfo, error) {
 			PowerWatts:      uint(math.Round(float64(power) / 1000)),
 			PowerLimitWatts: uint(math.Round(float64(powerLimitWatts) / 1000)),
 			Processes:       processesInfo,
+			PCIeLinkState:   pcieLinkState,
 		}
 
 		gpuInfos[i] = gpuInfo
@@ -658,6 +661,8 @@ func main() {
 			devices[i] = device
 		}
 		pcieStateManager = NewPCIeStateManager(devices)
+		pcieStateManager.Start()
+		defer pcieStateManager.Stop()
 	}
 
 	// Print any configured power limits
