@@ -19,7 +19,7 @@ import (
 	"github.com/NVIDIA/go-nvml/pkg/nvml"
 )
 
-const version = "1.3.2"
+const version = "1.3.3"
 
 type GPUInfo struct {
 	Index              uint    `json:"index"`
