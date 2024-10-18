@@ -584,10 +584,17 @@ func GetGPUInfo() ([]GPUInfo, error) {
 			}
 			devices[i] = device
 		}
-		pcieLinkState, err := pcieStateManager.GetCurrentLinkState(i)
-		if err != nil {
-			log.Printf("Warning: Failed to get PCIe link state for GPU %d: %v", i, err)
-			pcieLinkState = "unknown"
+		var pcieLinkState string
+		if pcieStateManager != nil {
+			state, err := pcieStateManager.GetCurrentLinkState(i)
+			if err != nil {
+				log.Printf("Warning: Failed to get PCIe link state for GPU %d: %v", i, err)
+				pcieLinkState = "unknown"
+			} else {
+				pcieLinkState = state
+			}
+		} else {
+			pcieLinkState = "not managed"
 		}
 
 		gpuInfo := GPUInfo{
