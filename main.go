@@ -86,7 +86,8 @@ type PCIeStateManager struct {
 	lastChangeTime     map[int]time.Time
 	configs            map[int]*PCIeConfig
 	mutex              sync.RWMutex
-	lastUpdateTime     time.Time
+	updateInterval     time.Duration
+	stopChan           chan struct{}
 }
 
 var (
@@ -792,10 +793,33 @@ func NewPCIeStateManager(devices []nvml.Device) *PCIeStateManager {
 		utilisationHistory: make(map[int][]float64),
 		lastChangeTime:     make(map[int]time.Time),
 		configs:            make(map[int]*PCIeConfig),
+		updateInterval:     time.Second, // Update every second
+		stopChan:           make(chan struct{}),
 	}
-
 	manager.loadConfigurations()
 	return manager
+}
+
+func (m *PCIeStateManager) Start() {
+	go m.updateLoop()
+}
+
+func (m *PCIeStateManager) Stop() {
+	close(m.stopChan)
+}
+
+func (m *PCIeStateManager) updateLoop() {
+	ticker := time.NewTicker(m.updateInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			m.UpdateUtilisation()
+		case <-m.stopChan:
+			return
+		}
+	}
 }
 
 func setPCIeSpeed(device string, targetSpeed int) error {
@@ -942,14 +966,6 @@ func (m *PCIeStateManager) UpdateUtilisation() {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
-	now := time.Now()
-	if m.lastUpdateTime.IsZero() {
-		m.lastUpdateTime = now
-	}
-
-	elapsedSeconds := int(now.Sub(m.lastUpdateTime).Seconds())
-	m.lastUpdateTime = now
-
 	for i, device := range m.devices {
 		if !m.configs[i].Enabled {
 			continue
@@ -961,18 +977,9 @@ func (m *PCIeStateManager) UpdateUtilisation() {
 			continue
 		}
 
-		// Add current utilization to history
 		m.utilisationHistory[i] = append(m.utilisationHistory[i], float64(usage.Gpu))
-
-		// Pad history with zeros if more than 1 second has passed since last update
-		if elapsedSeconds > 1 {
-			padding := make([]float64, elapsedSeconds-1)
-			m.utilisationHistory[i] = append(m.utilisationHistory[i], padding...)
-		}
-
-		// Trim history to match idle threshold
 		if len(m.utilisationHistory[i]) > m.configs[i].IdleThresholdSeconds {
-			m.utilisationHistory[i] = m.utilisationHistory[i][len(m.utilisationHistory[i])-m.configs[i].IdleThresholdSeconds:]
+			m.utilisationHistory[i] = m.utilisationHistory[i][1:]
 		}
 
 		log.Printf("GPU %d utilization: %.2f%% (History length: %d)", i, float64(usage.Gpu), len(m.utilisationHistory[i]))
