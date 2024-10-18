@@ -957,8 +957,13 @@ func (m *PCIeStateManager) UpdateUtilisation() {
 			m.utilisationHistory[i] = m.utilisationHistory[i][1:]
 		}
 
+		log.Printf("GPU %d utilization: %.2f%%", i, float64(usage.Gpu))
+
 		if m.shouldChangeLinkSpeed(i) {
-			m.changeLinkSpeed(i, device)
+			err := m.changeLinkSpeed(i, device)
+			if err != nil {
+				log.Printf("Failed to change link speed for GPU %d: %v", i, err)
+			}
 		}
 	}
 }
@@ -968,40 +973,57 @@ func (m *PCIeStateManager) shouldChangeLinkSpeed(index int) bool {
 	config := m.configs[index]
 
 	if len(history) < config.IdleThresholdSeconds {
+		log.Printf("GPU %d: Not enough history to determine if link speed should change (current: %d, required: %d)",
+			index, len(history), config.IdleThresholdSeconds)
 		return false
 	}
 
 	for _, util := range history {
 		if util >= 1.0 {
+			log.Printf("GPU %d: Utilization above threshold (%.2f%%), not changing link speed", index, util)
 			return false
 		}
 	}
 
 	lastChange, exists := m.lastChangeTime[index]
 	if !exists || time.Since(lastChange) >= 5*time.Minute {
+		log.Printf("GPU %d: Conditions met to change link speed", index)
 		return true
 	}
 
+	log.Printf("GPU %d: Too soon since last change (%.2f minutes ago)", index, time.Since(lastChange).Minutes())
 	return false
 }
 
-func (m *PCIeStateManager) changeLinkSpeed(index int, device nvml.Device) {
+func (m *PCIeStateManager) changeLinkSpeed(index int, device nvml.Device) error {
 	pciInfo, ret := device.GetPciInfo()
 	if ret != nvml.SUCCESS {
-		log.Printf("Failed to get PCI info for GPU %d: %v", index, nvml.ErrorString(ret))
-		return
+		return fmt.Errorf("failed to get PCI info for GPU %d: %v", index, nvml.ErrorString(ret))
 	}
 
 	deviceAddress := fmt.Sprintf("%04x:%02x:%02x.0", pciInfo.Domain, pciInfo.Bus, pciInfo.Device)
 
-	err := setPCIeSpeed(deviceAddress, m.configs[index].MinSpeed)
+	currentSpeed, err := m.GetCurrentLinkSpeed(index)
 	if err != nil {
-		log.Printf("Failed to set PCIe speed for GPU %d: %v", index, err)
-		return
+		return fmt.Errorf("failed to get current link speed for GPU %d: %v", index, err)
 	}
 
-	log.Printf("Set PCIe link speed to %d for GPU %d", m.configs[index].MinSpeed, index)
+	targetSpeed := m.configs[index].MinSpeed
+	if currentSpeed == m.configs[index].MinSpeed {
+		targetSpeed = m.configs[index].MaxSpeed
+	}
+
+	log.Printf("GPU %d: Attempting to change PCIe link speed from %d to %d", index, currentSpeed, targetSpeed)
+
+	err = setPCIeSpeed(deviceAddress, targetSpeed)
+	if err != nil {
+		return fmt.Errorf("failed to set PCIe speed for GPU %d: %v", index, err)
+	}
+
+	log.Printf("GPU %d: Successfully changed PCIe link speed to %d", index, targetSpeed)
 	m.lastChangeTime[index] = time.Now()
+
+	return nil
 }
 
 func (m *PCIeStateManager) GetCurrentLinkSpeed(index int) (int, error) {
