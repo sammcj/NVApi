@@ -658,8 +658,9 @@ func main() {
 	// }
 
 	// Initialise PCIeStateManager
-	var pcieStateManagerInitialized bool
+	var pcieStateManagerInitialised bool
 	if *enablePCIeStateManagement {
+		log.Println("Initializing PCIe State Manager")
 		devices := make([]nvml.Device, count)
 		for i := 0; i < int(count); i++ {
 			device, ret := nvml.DeviceGetHandleByIndex(i)
@@ -671,7 +672,10 @@ func main() {
 		pcieStateManager = NewPCIeStateManager(devices)
 		pcieStateManager.Start()
 		defer pcieStateManager.Stop()
-		pcieStateManagerInitialized = true
+		pcieStateManagerInitialised = true
+		log.Println("PCIe State Manager initialized and started")
+	} else {
+		log.Println("PCIe State Management is disabled")
 	}
 
 	// Print any configured power limits
@@ -718,7 +722,7 @@ func main() {
 				*rl.cache = gpuInfos
 				rl.mu.Unlock()
 
-				if pcieStateManagerInitialized {
+				if pcieStateManagerInitialised {
 					pcieStateManager.UpdateUtilisation()
 				}
 			}
@@ -979,13 +983,15 @@ func (m *PCIeStateManager) loadConfigurations() {
 			i, config.Enabled, config.IdleThresholdSeconds, config.MinSpeed, config.MaxSpeed)
 	}
 }
-
 func (m *PCIeStateManager) UpdateUtilisation() {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
+	log.Println("Starting UpdateUtilisation")
+
 	for i, device := range m.devices {
 		if !m.configs[i].Enabled {
+			log.Printf("GPU %d: PCIe management not enabled, skipping", i)
 			continue
 		}
 
@@ -995,32 +1001,38 @@ func (m *PCIeStateManager) UpdateUtilisation() {
 			continue
 		}
 
-		// Append new utilization data
 		m.utilisationHistory[i] = append(m.utilisationHistory[i], float64(usage.Gpu))
-
-		// Trim history if it exceeds the threshold
 		if len(m.utilisationHistory[i]) > m.configs[i].IdleThresholdSeconds {
-			m.utilisationHistory[i] = m.utilisationHistory[i][len(m.utilisationHistory[i])-m.configs[i].IdleThresholdSeconds:]
+			m.utilisationHistory[i] = m.utilisationHistory[i][1:]
 		}
 
 		log.Printf("GPU %d utilization: %.2f%% (History length: %d)", i, float64(usage.Gpu), len(m.utilisationHistory[i]))
 
 		if m.shouldChangeLinkSpeed(i) {
+			log.Printf("GPU %d: Attempting to change link speed", i)
 			err := m.changeLinkSpeed(i, device)
 			if err != nil {
 				log.Printf("Failed to change link speed for GPU %d: %v", i, err)
+			} else {
+				log.Printf("GPU %d: Successfully changed link speed", i)
 			}
+		} else {
+			log.Printf("GPU %d: No need to change link speed", i)
 		}
 	}
+
+	log.Println("Finished UpdateUtilisation")
 }
 
 func (m *PCIeStateManager) shouldChangeLinkSpeed(index int) bool {
 	history := m.utilisationHistory[index]
 	config := m.configs[index]
 
+	log.Printf("GPU %d: Checking if link speed should change", index)
+	log.Printf("GPU %d: History length: %d, Required: %d", index, len(history), config.IdleThresholdSeconds)
+
 	if len(history) < config.IdleThresholdSeconds {
-		log.Printf("GPU %d: Not enough history to determine if link speed should change (current: %d, required: %d)",
-			index, len(history), config.IdleThresholdSeconds)
+		log.Printf("GPU %d: Not enough history to determine if link speed should change", index)
 		return false
 	}
 
@@ -1031,6 +1043,8 @@ func (m *PCIeStateManager) shouldChangeLinkSpeed(index int) bool {
 			break
 		}
 	}
+
+	log.Printf("GPU %d: Is idle? %v", index, isIdle)
 
 	if isIdle {
 		lastChange, exists := m.lastChangeTime[index]
