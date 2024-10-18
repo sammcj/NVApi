@@ -173,7 +173,7 @@ services:
       - 9999:9999
     environment:
       GPU_TEMP_CHECK_INTERVAL: 5
-      GPU_TOTAL_POWER_CAP: 400
+      GPU_TOTAL_POWER_CAP: 600
       GPU_0_LOW_TEMP: 50
       GPU_0_MEDIUM_TEMP: 80
       GPU_0_LOW_TEMP_LIMIT: 370
@@ -186,6 +186,15 @@ services:
       GPU_1_HIGH_TEMP_LIMIT: 100
     cap_add:
       - SYS_ADMIN # grant permissions to set power limits
+```
+
+You may alternatively use the GPU UUID instead of the index, e.g:
+
+```yaml
+GPU_14b70e9a-19a8-bc20-fd3e-0f3a1430dc24_LOW_TEMP: 80
+GPU_14b70e9a-19a8-bc20-fd3e-0f3a1430dc24_MEDIUM_TEMP: 84
+GPU_14b70e9a-19a8-bc20-fd3e-0f3a1430dc24_LOW_TEMP_LIMIT: 140
+GPU_14b70e9a-19a8-bc20-fd3e-0f3a1430dc24_MEDIUM_TEMP_LIMIT: 120
 ```
 
 #### Behaviour

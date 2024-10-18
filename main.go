@@ -72,6 +72,41 @@ var (
 	lastTotalPower    uint
 )
 
+// getGPUUUID retrieves the UUID for a given GPU device
+func getGPUUUID(device nvml.Device) (string, error) {
+	uuid, ret := device.GetUUID()
+	if ret != nvml.SUCCESS {
+		return "", fmt.Errorf("unable to get UUID for device: %v", nvml.ErrorString(ret))
+	}
+	return uuid, nil
+}
+
+// mapUUIDsToIndices creates a mapping of GPU UUIDs to their corresponding device indices
+func mapUUIDsToIndices() (map[string]int, error) {
+	uuidToIndex := make(map[string]int)
+
+	count, ret := nvml.DeviceGetCount()
+	if ret != nvml.SUCCESS {
+		return nil, fmt.Errorf("unable to get device count: %v", nvml.ErrorString(ret))
+	}
+
+	for i := 0; i < int(count); i++ {
+		device, ret := nvml.DeviceGetHandleByIndex(i)
+		if ret != nvml.SUCCESS {
+			return nil, fmt.Errorf("unable to get device at index %d: %v", i, nvml.ErrorString(ret))
+		}
+
+		uuid, err := getGPUUUID(device)
+		if err != nil {
+			return nil, err
+		}
+
+		uuidToIndex[uuid] = i
+	}
+
+	return uuidToIndex, nil
+}
+
 func parseTotalPowerCap() {
 	capStr := os.Getenv("GPU_TOTAL_POWER_CAP")
 	if capStr == "" {
@@ -251,29 +286,78 @@ func getProcessInfo(pid uint32) (string, []string, error) {
 }
 
 // parseTempPowerLimits parses the environment variables for temperature-based power limits
-func parseTempPowerLimits() {
+func parseTempPowerLimits() error {
 	gpuPowerLimits = make(map[int]TempPowerLimits)
 
-	for i := 0; ; i++ {
-		prefix := fmt.Sprintf("GPU_%d_", i)
-		lowTemp, err1 := strconv.Atoi(os.Getenv(prefix + "LOW_TEMP"))
-		mediumTemp, err2 := strconv.Atoi(os.Getenv(prefix + "MEDIUM_TEMP"))
-		lowTempLimit, err3 := strconv.ParseUint(os.Getenv(prefix+"LOW_TEMP_LIMIT"), 10, 32)
-		mediumTempLimit, err4 := strconv.ParseUint(os.Getenv(prefix+"MEDIUM_TEMP_LIMIT"), 10, 32)
-		highTempLimit, err5 := strconv.ParseUint(os.Getenv(prefix+"HIGH_TEMP_LIMIT"), 10, 32)
+	uuidToIndex, err := mapUUIDsToIndices()
+	if err != nil {
+		return fmt.Errorf("failed to map UUIDs to indices: %v", err)
+	}
 
-		if err1 != nil || err2 != nil || err3 != nil || err4 != nil || err5 != nil {
-			break
-		}
+	for _, env := range os.Environ() {
+		if strings.HasPrefix(env, "GPU_") && strings.Contains(env, "_LOW_TEMP") {
+			parts := strings.SplitN(env, "=", 2)
+			if len(parts) != 2 {
+				continue
+			}
 
-		gpuPowerLimits[i] = TempPowerLimits{
-			LowTemp:         lowTemp,
-			MediumTemp:      mediumTemp,
-			LowTempLimit:    uint(lowTempLimit),
-			MediumTempLimit: uint(mediumTempLimit),
-			HighTempLimit:   uint(highTempLimit),
+			key := strings.TrimPrefix(parts[0], "GPU_")
+			key = strings.TrimSuffix(key, "_LOW_TEMP")
+
+			var index string
+			if strings.Contains(key, "-") {
+				// This is a UUID
+				if idx, ok := uuidToIndex[key]; ok {
+					index = strconv.Itoa(idx)
+				} else {
+					log.Printf("Warning: Unknown GPU UUID %s", key)
+					continue
+				}
+			} else {
+				// This is an index
+				index = key
+			}
+
+			lowTemp, err := strconv.Atoi(parts[1])
+			if err != nil {
+				return fmt.Errorf("invalid LOW_TEMP value for GPU %s: %v", key, err)
+			}
+
+			mediumTemp, err := strconv.Atoi(os.Getenv(fmt.Sprintf("GPU_%s_MEDIUM_TEMP", key)))
+			if err != nil {
+				return fmt.Errorf("invalid MEDIUM_TEMP value for GPU %s: %v", key, err)
+			}
+
+			lowTempLimit, err := strconv.ParseUint(os.Getenv(fmt.Sprintf("GPU_%s_LOW_TEMP_LIMIT", key)), 10, 32)
+			if err != nil {
+				return fmt.Errorf("invalid LOW_TEMP_LIMIT value for GPU %s: %v", key, err)
+			}
+
+			mediumTempLimit, err := strconv.ParseUint(os.Getenv(fmt.Sprintf("GPU_%s_MEDIUM_TEMP_LIMIT", key)), 10, 32)
+			if err != nil {
+				return fmt.Errorf("invalid MEDIUM_TEMP_LIMIT value for GPU %s: %v", key, err)
+			}
+
+			highTempLimit, err := strconv.ParseUint(os.Getenv(fmt.Sprintf("GPU_%s_HIGH_TEMP_LIMIT", key)), 10, 32)
+			if err != nil {
+				return fmt.Errorf("invalid HIGH_TEMP_LIMIT value for GPU %s: %v", key, err)
+			}
+
+			idx, err := strconv.Atoi(index)
+			if err != nil {
+				return fmt.Errorf("invalid GPU index %s: %v", index, err)
+			}
+			gpuPowerLimits[idx] = TempPowerLimits{
+				LowTemp:         lowTemp,
+				MediumTemp:      mediumTemp,
+				LowTempLimit:    uint(lowTempLimit),
+				MediumTempLimit: uint(mediumTempLimit),
+				HighTempLimit:   uint(highTempLimit),
+			}
 		}
 	}
+
+	return nil
 }
 
 // applyPowerLimit applies the appropriate power limit based on the current temperature
@@ -453,7 +537,17 @@ func main() {
 	}
 
 	// Parse temperature-based power limits from environment variables
-	parseTempPowerLimits()
+	if err := parseTempPowerLimits(); err != nil {
+		log.Fatalf("Error parsing temperature-based power limits: %v", err)
+	}
+
+	if *debug {
+		// Print any configured power limits
+		for index, limits := range gpuPowerLimits {
+			log.Printf("GPU %d power limits: LowTemp: %d, LowTempLimit: %d W, MediumTemp: %d, MediumTempLimit: %d W, HighTempLimit: %d W",
+				index, limits.LowTemp, limits.LowTempLimit, limits.MediumTemp, limits.MediumTempLimit, limits.HighTempLimit)
+		}
+	}
 
 	// Parse temperature check interval from environment variable
 	parseTempCheckInterval()
