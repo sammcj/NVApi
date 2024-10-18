@@ -69,7 +69,6 @@ type GPUCapabilities struct {
 	FanSpeedSupported bool
 }
 
-
 const (
 	pcieSysfsPath = "/sys/bus/pci/devices"
 )
@@ -88,7 +87,6 @@ type PCIeStateManager struct {
 	configs            map[int]*PCIeConfig
 	mutex              sync.RWMutex
 }
-
 
 var (
 	port                      = flag.Int("port", 9999, "Port to listen on")
@@ -385,29 +383,32 @@ func parseTempPowerLimits() error {
 				index = key
 			}
 
+			// Use the base key (without _LOW_TEMP) for all environment variable names
+			baseKey := key
+
 			lowTemp, err := strconv.Atoi(parts[1])
 			if err != nil {
-				return fmt.Errorf("invalid LOW_TEMP value for GPU %s: %v", key, err)
+				return fmt.Errorf("invalid LOW_TEMP value for GPU %s: %v", baseKey, err)
 			}
 
-			mediumTemp, err := strconv.Atoi(os.Getenv(fmt.Sprintf("GPU_%s_MEDIUM_TEMP", key)))
+			mediumTemp, err := strconv.Atoi(os.Getenv(fmt.Sprintf("GPU_%s_MEDIUM_TEMP", baseKey)))
 			if err != nil {
-				return fmt.Errorf("invalid MEDIUM_TEMP value for GPU %s: %v", key, err)
+				return fmt.Errorf("invalid MEDIUM_TEMP value for GPU %s: %v", baseKey, err)
 			}
 
-			lowTempLimit, err := strconv.ParseUint(os.Getenv(fmt.Sprintf("GPU_%s_LOW_TEMP_LIMIT", key)), 10, 32)
+			lowTempLimit, err := strconv.ParseUint(os.Getenv(fmt.Sprintf("GPU_%s_LOW_TEMP_LIMIT", baseKey)), 10, 32)
 			if err != nil {
-				return fmt.Errorf("invalid LOW_TEMP_LIMIT value for GPU %s: %v", key, err)
+				return fmt.Errorf("invalid LOW_TEMP_LIMIT value for GPU %s: %v", baseKey, err)
 			}
 
-			mediumTempLimit, err := strconv.ParseUint(os.Getenv(fmt.Sprintf("GPU_%s_MEDIUM_TEMP_LIMIT", key)), 10, 32)
+			mediumTempLimit, err := strconv.ParseUint(os.Getenv(fmt.Sprintf("GPU_%s_MEDIUM_TEMP_LIMIT", baseKey)), 10, 32)
 			if err != nil {
-				return fmt.Errorf("invalid MEDIUM_TEMP_LIMIT value for GPU %s: %v", key, err)
+				return fmt.Errorf("invalid MEDIUM_TEMP_LIMIT value for GPU %s: %v", baseKey, err)
 			}
 
-			highTempLimit, err := strconv.ParseUint(os.Getenv(fmt.Sprintf("GPU_%s_HIGH_TEMP_LIMIT", key)), 10, 32)
+			highTempLimit, err := strconv.ParseUint(os.Getenv(fmt.Sprintf("GPU_%s_HIGH_TEMP_LIMIT", baseKey)), 10, 32)
 			if err != nil {
-				return fmt.Errorf("invalid HIGH_TEMP_LIMIT value for GPU %s: %v", key, err)
+				return fmt.Errorf("invalid HIGH_TEMP_LIMIT value for GPU %s: %v", baseKey, err)
 			}
 
 			idx, err := strconv.Atoi(index)
@@ -764,7 +765,6 @@ func main() {
 	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", *port), nil))
 }
 
-
 func NewPCIeStateManager(devices []nvml.Device) *PCIeStateManager {
 	manager := &PCIeStateManager{
 		devices:            devices,
@@ -776,7 +776,6 @@ func NewPCIeStateManager(devices []nvml.Device) *PCIeStateManager {
 	manager.loadConfigurations()
 	return manager
 }
-
 
 func setPCIeSpeed(device string, targetSpeed int) error {
 	// Ensure the device path is correct
@@ -883,7 +882,6 @@ func runSetpci(device, command string) (string, error) {
 	}
 	return strings.TrimSpace(string(output)), nil
 }
-
 
 func (m *PCIeStateManager) loadConfigurations() {
 	for i := range m.devices {
@@ -1014,7 +1012,6 @@ func (m *PCIeStateManager) GetCurrentLinkSpeed(index int) (int, error) {
 
 	return int(speed), nil
 }
-
 
 func (m *PCIeStateManager) GetCurrentLinkState(index int) (string, error) {
 	m.mutex.RLock()
