@@ -367,7 +367,13 @@ func parseTempPowerLimits() error {
 			}
 
 			key := strings.TrimPrefix(parts[0], "GPU_")
+			// Remove all suffixes related to temperature limits
 			key = strings.TrimSuffix(key, "_LOW_TEMP")
+			key = strings.TrimSuffix(key, "_MEDIUM_TEMP")
+			key = strings.TrimSuffix(key, "_HIGH_TEMP")
+			key = strings.TrimSuffix(key, "_LOW_TEMP_LIMIT")
+			key = strings.TrimSuffix(key, "_MEDIUM_TEMP_LIMIT")
+			key = strings.TrimSuffix(key, "_HIGH_TEMP_LIMIT")
 
 			log.Printf("Debug: Processing key: %s", key)
 
@@ -387,12 +393,18 @@ func parseTempPowerLimits() error {
 
 			log.Printf("Debug: Resolved index: %s", index)
 
-			lowTemp, err := strconv.Atoi(parts[1])
+			// Use the key to construct environment variable names
+			lowTempEnv := fmt.Sprintf("GPU_%s_LOW_TEMP", key)
+			mediumTempEnv := fmt.Sprintf("GPU_%s_MEDIUM_TEMP", key)
+			lowTempLimitEnv := fmt.Sprintf("GPU_%s_LOW_TEMP_LIMIT", key)
+			mediumTempLimitEnv := fmt.Sprintf("GPU_%s_MEDIUM_TEMP_LIMIT", key)
+			highTempLimitEnv := fmt.Sprintf("GPU_%s_HIGH_TEMP_LIMIT", key)
+
+			lowTemp, err := strconv.Atoi(os.Getenv(lowTempEnv))
 			if err != nil {
 				return fmt.Errorf("invalid LOW_TEMP value for GPU %s: %v", key, err)
 			}
 
-			mediumTempEnv := fmt.Sprintf("GPU_%s_MEDIUM_TEMP", key)
 			mediumTempStr := os.Getenv(mediumTempEnv)
 			log.Printf("Debug: Looking for MEDIUM_TEMP with key: %s, value: %s", mediumTempEnv, mediumTempStr)
 
@@ -401,17 +413,17 @@ func parseTempPowerLimits() error {
 				return fmt.Errorf("invalid MEDIUM_TEMP value for GPU %s: %v", key, err)
 			}
 
-			lowTempLimit, err := strconv.ParseUint(os.Getenv(fmt.Sprintf("GPU_%s_LOW_TEMP_LIMIT", key)), 10, 32)
+			lowTempLimit, err := strconv.ParseUint(os.Getenv(lowTempLimitEnv), 10, 32)
 			if err != nil {
 				return fmt.Errorf("invalid LOW_TEMP_LIMIT value for GPU %s: %v", key, err)
 			}
 
-			mediumTempLimit, err := strconv.ParseUint(os.Getenv(fmt.Sprintf("GPU_%s_MEDIUM_TEMP_LIMIT", key)), 10, 32)
+			mediumTempLimit, err := strconv.ParseUint(os.Getenv(mediumTempLimitEnv), 10, 32)
 			if err != nil {
 				return fmt.Errorf("invalid MEDIUM_TEMP_LIMIT value for GPU %s: %v", key, err)
 			}
 
-			highTempLimit, err := strconv.ParseUint(os.Getenv(fmt.Sprintf("GPU_%s_HIGH_TEMP_LIMIT", key)), 10, 32)
+			highTempLimit, err := strconv.ParseUint(os.Getenv(highTempLimitEnv), 10, 32)
 			if err != nil {
 				return fmt.Errorf("invalid HIGH_TEMP_LIMIT value for GPU %s: %v", key, err)
 			}
