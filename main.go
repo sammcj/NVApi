@@ -632,6 +632,11 @@ func main() {
 	println("NVApi Version: ", version)
 	flag.Parse()
 
+	// if DEBUG=true, set debug to true
+	if os.Getenv("DEBUG") == "true" {
+		*debug = true
+	}
+
 	if *debug {
 		println("*** Debug Mode ***")
 		println("Port: ", *port)
