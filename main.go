@@ -94,6 +94,7 @@ var (
 	port                      = flag.Int("port", 9999, "Port to listen on")
 	rate                      = flag.Int("rate", 3, "Minimum number of seconds between requests")
 	debug                     = flag.Bool("debug", false, "Print debug logs to the console")
+	debugNvml                 = flag.Bool("debug-nvml", false, "Print all available NVML information")
 	help                      = flag.Bool("help", false, "Print this help")
 	gpuPowerLimits            map[int]TempPowerLimits
 	tempCheckInterval         time.Duration
@@ -634,9 +635,158 @@ func GetGPUInfo() ([]GPUInfo, error) {
 
 	return gpuInfos, nil
 }
+func debugNvmlInfo() {
+	count, ret := nvml.DeviceGetCount()
+	if ret != nvml.SUCCESS {
+		log.Fatalf("Unable to get device count: %v", nvml.ErrorString(ret))
+	}
+
+	fmt.Println("\nNVML Debug Information:")
+
+	if driverVersion, ret := nvml.SystemGetDriverVersion(); ret == nvml.SUCCESS {
+		fmt.Printf("Driver Version: %s\n", driverVersion)
+	}
+	if nvmlVersion, ret := nvml.SystemGetNVMLVersion(); ret == nvml.SUCCESS {
+		fmt.Printf("NVML Version: %s\n", nvmlVersion)
+	}
+	if cudaVersion, ret := nvml.SystemGetCudaDriverVersion(); ret == nvml.SUCCESS {
+		fmt.Printf("CUDA Driver Version: %d\n", cudaVersion)
+	}
+	fmt.Printf("Device Count: %d\n", count)
+
+	for i := 0; i < int(count); i++ {
+		device, ret := nvml.DeviceGetHandleByIndex(i)
+		if ret != nvml.SUCCESS {
+			log.Printf("Error getting device %d: %v", i, nvml.ErrorString(ret))
+			continue
+		}
+
+		fmt.Printf("\n=== GPU %d Information ===\n", i)
+
+		// Basic Information
+		if name, ret := device.GetName(); ret == nvml.SUCCESS {
+			fmt.Printf("| device.GetName() | %s |\n", name)
+		}
+		if uuid, ret := device.GetUUID(); ret == nvml.SUCCESS {
+			fmt.Printf("| device.GetUUID() | %s |\n", uuid)
+		}
+		if serial, ret := device.GetSerial(); ret == nvml.SUCCESS {
+			fmt.Printf("| device.GetSerial() | %s |\n", serial)
+		}
+		if bios, ret := device.GetVbiosVersion(); ret == nvml.SUCCESS {
+			fmt.Printf("| device.GetVbiosVersion() | %s |\n", bios)
+		}
+
+		// Memory Information
+		if memory, ret := device.GetMemoryInfo(); ret == nvml.SUCCESS {
+			fmt.Printf("| device.GetMemoryInfo().Total | %d MB |\n", memory.Total/1024/1024)
+			fmt.Printf("| device.GetMemoryInfo().Used | %d MB |\n", memory.Used/1024/1024)
+			fmt.Printf("| device.GetMemoryInfo().Free | %d MB |\n", memory.Free/1024/1024)
+		}
+
+		// Utilization Information
+		if util, ret := device.GetUtilizationRates(); ret == nvml.SUCCESS {
+			fmt.Printf("| device.GetUtilizationRates().Gpu | %d%% |\n", util.Gpu)
+			fmt.Printf("| device.GetUtilizationRates().Memory | %d%% |\n", util.Memory)
+		}
+
+		// Power Information
+		if power, ret := device.GetPowerUsage(); ret == nvml.SUCCESS {
+			fmt.Printf("| device.GetPowerUsage() | %d W |\n", power/1000)
+		}
+		if limit, ret := device.GetPowerManagementLimit(); ret == nvml.SUCCESS {
+			fmt.Printf("| device.GetPowerManagementLimit() | %d W |\n", limit/1000)
+		}
+		if defaultLimit, ret := device.GetPowerManagementDefaultLimit(); ret == nvml.SUCCESS {
+			fmt.Printf("| device.GetPowerManagementDefaultLimit() | %d W |\n", defaultLimit/1000)
+		}
+
+		// Temperature Information
+		if temp, ret := device.GetTemperature(nvml.TEMPERATURE_GPU); ret == nvml.SUCCESS {
+			fmt.Printf("| device.GetTemperature(TEMPERATURE_GPU) | %d°C |\n", temp)
+		}
+		if temp, ret := device.GetTemperatureThreshold(nvml.TEMPERATURE_THRESHOLD_SHUTDOWN); ret == nvml.SUCCESS {
+			fmt.Printf("| device.GetTemperatureThreshold(TEMPERATURE_THRESHOLD_SHUTDOWN) | %d°C |\n", temp)
+		}
+		if temp, ret := device.GetTemperatureThreshold(nvml.TEMPERATURE_THRESHOLD_SLOWDOWN); ret == nvml.SUCCESS {
+			fmt.Printf("| device.GetTemperatureThreshold(TEMPERATURE_THRESHOLD_SLOWDOWN) | %d°C |\n", temp)
+		}
+
+		// Clock Information
+		if clock, ret := device.GetClockInfo(nvml.CLOCK_GRAPHICS); ret == nvml.SUCCESS {
+			fmt.Printf("| device.GetClockInfo(CLOCK_GRAPHICS) | %d MHz |\n", clock)
+		}
+		if clock, ret := device.GetClockInfo(nvml.CLOCK_SM); ret == nvml.SUCCESS {
+			fmt.Printf("| device.GetClockInfo(CLOCK_SM) | %d MHz |\n", clock)
+		}
+		if clock, ret := device.GetClockInfo(nvml.CLOCK_MEM); ret == nvml.SUCCESS {
+			fmt.Printf("| device.GetClockInfo(CLOCK_MEM) | %d MHz |\n", clock)
+		}
+
+		// Max Clocks
+		if clock, ret := device.GetMaxClockInfo(nvml.CLOCK_GRAPHICS); ret == nvml.SUCCESS {
+			fmt.Printf("| device.GetMaxClockInfo(CLOCK_GRAPHICS) | %d MHz |\n", clock)
+		}
+		if clock, ret := device.GetMaxClockInfo(nvml.CLOCK_SM); ret == nvml.SUCCESS {
+			fmt.Printf("| device.GetMaxClockInfo(CLOCK_SM) | %d MHz |\n", clock)
+		}
+		if clock, ret := device.GetMaxClockInfo(nvml.CLOCK_MEM); ret == nvml.SUCCESS {
+			fmt.Printf("| device.GetMaxClockInfo(CLOCK_MEM) | %d MHz |\n", clock)
+		}
+
+		// PCIe Information
+		if pci, ret := device.GetPciInfo(); ret == nvml.SUCCESS {
+			fmt.Printf("| device.GetPciInfo().BusId | %s |\n", pci.BusId)
+			fmt.Printf("| device.GetPciInfo().Domain | %d |\n", pci.Domain)
+			fmt.Printf("| device.GetPciInfo().Bus | %d |\n", pci.Bus)
+			fmt.Printf("| device.GetPciInfo().Device | %d |\n", pci.Device)
+			fmt.Printf("| device.GetPciInfo().PciDeviceId | %d |\n", pci.PciDeviceId)
+			fmt.Printf("| device.GetPciInfo().PciSubSystemId | %d |\n", pci.PciSubSystemId)
+		}
+
+		// Fan Information
+		if speed, ret := device.GetFanSpeed(); ret == nvml.SUCCESS {
+			fmt.Printf("| device.GetFanSpeed() | %d%% |\n", speed)
+		}
+
+		// Performance State
+		if pstate, ret := device.GetPerformanceState(); ret == nvml.SUCCESS {
+			fmt.Printf("| device.GetPerformanceState() | P%d |\n", pstate)
+		}
+
+		// Compute Mode
+		if mode, ret := device.GetComputeMode(); ret == nvml.SUCCESS {
+			fmt.Printf("| device.GetComputeMode() | %v |\n", mode)
+		}
+
+		// ECC Mode
+		if current, pending, ret := device.GetEccMode(); ret == nvml.SUCCESS {
+			fmt.Printf("| device.GetEccMode() | Current: %v, Pending: %v |\n", current, pending)
+		}
+
+		// Process Information
+		if procs, ret := nvml.DeviceGetComputeRunningProcesses(device); ret == nvml.SUCCESS {
+			for _, proc := range procs {
+				fmt.Printf("| device.GetComputeRunningProcesses() | PID: %d, Memory: %d MB |\n",
+					proc.Pid, proc.UsedGpuMemory/1024/1024)
+			}
+		}
+	}
+	os.Exit(0)
+}
 
 func main() {
 	println("NVApi Version: ", version)
+	flag.Parse()
+
+	if *debugNvml {
+		ret := nvml.Init()
+		if ret != nvml.SUCCESS {
+			log.Fatalf("Failed to initialize NVML: %v", nvml.ErrorString(ret))
+		}
+		defer nvml.Shutdown()
+		debugNvmlInfo()
+	}
 	flag.Parse()
 
 	// if DEBUG=true, set debug to true
