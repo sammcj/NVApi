@@ -12,6 +12,7 @@ A lightweight API that returns Nvidia GPU utilisation information and allows for
     - [Local Installation](#local-installation)
   - [API Endpoints](#api-endpoints)
     - [`/`](#)
+    - [`/gpu/uuid`](#gpuuuid)
   - [Query Parameters](#query-parameters)
   - [Example Response](#example-response)
     - [Automated Power Limiting](#automated-power-limiting)
@@ -55,6 +56,10 @@ This will start the API on port 9999 with a rate limit of 1 request per second.
 
 Returns the current GPU utilisation information in JSON format.
 
+### `/gpu/uuid`
+
+Returns the UUID of the GPU. This is particularly useful when you need to identify specific GPUs in a multi-GPU system, especially when using UUID-based configuration for power limits.
+
 ## Query Parameters
 
 - `port`: The port number to listen on (default: 9999)
@@ -69,6 +74,7 @@ curl http://localhost:9999/gpu
 ```json
 [{
   "index": 0,
+  "uuid": "GPU-14b70e9a-19a8-bc20-fd3e-0f3a1430dc24",
   "name": "NVIDIA GeForce RTX 3090",
   "gpu_utilisation": 0,
   "memory_utilisation": 0,
@@ -88,6 +94,7 @@ curl http://localhost:9999/gpu
   }]
 }, {
   "index": 1,
+  "uuid": "GPU-389accfb-8815-6341-b1cc-82d6189527a0",
   "name": "NVIDIA RTX A4000",
   "gpu_utilisation": 0,
   "memory_utilisation": 0,
