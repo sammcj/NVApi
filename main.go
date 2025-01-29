@@ -484,7 +484,8 @@ func applyPowerLimit(device nvml.Device, index int, currentTemp uint) error {
 
 // Updated GetGPUInfo function
 func GetGPUInfo() ([]GPUInfo, error) {
-	err := checkAndApplyPowerLimits()
+	var err error
+	err = checkAndApplyPowerLimits()
 	if err != nil {
 		log.Printf("Warning: Failed to check and apply power limits: %v", err)
 	}
