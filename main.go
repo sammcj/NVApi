@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"math"
 	"net/http"
@@ -23,6 +22,7 @@ const version = "1.3.3"
 
 type GPUInfo struct {
 	Index              uint    `json:"index"`
+	UUID               string  `json:"uuid"`
 	Name               string  `json:"name"`
 	GPUUtilisation     uint    `json:"gpu_utilisation"`
 	MemoryUtilisation  uint    `json:"memory_utilisation"`
@@ -510,6 +510,12 @@ func GetGPUInfo() ([]GPUInfo, error) {
 			return nil, fmt.Errorf("unable to get device index: %v", nvml.ErrorString(ret))
 		}
 
+		var uuid string
+		uuid, err = getGPUUUID(device)
+		if err != nil {
+			return nil, fmt.Errorf("unable to get device UUID: %v", err)
+		}
+
 		name, ret := device.GetName()
 		if ret != nvml.SUCCESS {
 			return nil, fmt.Errorf("unable to get device name: %v", nvml.ErrorString(ret))
@@ -607,6 +613,7 @@ func GetGPUInfo() ([]GPUInfo, error) {
 
 		gpuInfo := GPUInfo{
 			Index:              uint(index),
+			UUID:               uuid,
 			Name:               name,
 			GPUUtilisation:     uint(usage.Gpu),
 			MemoryUtilisation:  uint(usage.Memory),
@@ -767,6 +774,7 @@ func main() {
 
 		pathToField := map[string]func(*GPUInfo) interface{}{
 			"/gpu/index":                func(gpuInfo *GPUInfo) interface{} { return gpuInfo.Index },
+			"/gpu/uuid":                 func(gpuInfo *GPUInfo) interface{} { return gpuInfo.UUID },
 			"/gpu/name":                 func(gpuInfo *GPUInfo) interface{} { return gpuInfo.Name },
 			"/gpu/gpu_utilisation":      func(gpuInfo *GPUInfo) interface{} { return gpuInfo.GPUUtilisation },
 			"/gpu/memory_utilisation":   func(gpuInfo *GPUInfo) interface{} { return gpuInfo.MemoryUtilisation },
@@ -1150,7 +1158,7 @@ func (m *PCIeStateManager) GetCurrentLinkState(index int) (string, error) {
 	domainBus := fmt.Sprintf("%04x:%02x:%02x.0", pciInfo.Domain, pciInfo.Bus, pciInfo.Device)
 	powerControlFile := filepath.Join(pcieSysfsPath, domainBus, "power", "control")
 
-	content, err := ioutil.ReadFile(powerControlFile)
+	content, err := os.ReadFile(powerControlFile)
 	if err != nil {
 		return "", fmt.Errorf("failed to read power control for GPU %d: %v", index, err)
 	}
