@@ -1527,14 +1527,18 @@ func main() {
 	}
 
 	// Log configured offsets
-	for deviceIndex, config := range gpuClockOffsetConfigs {
-		log.Printf("GPU %d offset configuration:", deviceIndex)
-		for pstate, offset := range config.GPUOffsets {
-			log.Printf("  P%d GPU: %+d MHz", pstate, offset)
+	if len(gpuClockOffsetConfigs) > 0 {
+		for deviceIndex, config := range gpuClockOffsetConfigs {
+			log.Printf("GPU %d offset configuration:", deviceIndex)
+			for pstate, offset := range config.GPUOffsets {
+				log.Printf("  P%d GPU: %+d MHz", pstate, offset)
+			}
+			for pstate, offset := range config.MemOffsets {
+				log.Printf("  P%d Memory: %+d MHz", pstate, offset)
+			}
 		}
-		for pstate, offset := range config.MemOffsets {
-			log.Printf("  P%d Memory: %+d MHz", pstate, offset)
-		}
+	} else {
+		log.Printf("Clock offset configuration: No offsets configured (all GPUs will be reset to defaults)")
 	}
 
 	// Check Python dependency if clock offsets are configured

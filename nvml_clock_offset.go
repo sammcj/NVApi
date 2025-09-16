@@ -70,7 +70,7 @@ nvmlReturn_t nvmlDeviceGetClockOffsetsWrapper(nvmlDevice_t device, nvmlClockOffs
 }
 
 // Wrapper that gets device by index and retrieves offsets
-nvmlReturn_t nvmlDeviceGetClockOffsetsByIndex(unsigned int index, nvmlClockType_t clockType, nvmlPstates_t pstate, nvmlClockOffset_t *info) {
+nvmlReturn_t nvmlDeviceGetClockOffsetsByIndex(unsigned int index, nvmlClockType_t clockType, nvmlPstates_t pstate, nvmlClockOffset_t *info, int debug_mode) {
     init_clock_offset_functions();
     if (!nvmlDeviceGetClockOffsets_ptr) {
         return NVML_ERROR_NOT_SUPPORTED;
@@ -98,7 +98,7 @@ nvmlReturn_t nvmlDeviceSetClockOffsetsWrapper(nvmlDevice_t device, nvmlClockOffs
 }
 
 // Wrapper that gets device by index and sets offsets
-nvmlReturn_t nvmlDeviceSetClockOffsetsByIndex(unsigned int index, nvmlClockType_t clockType, nvmlPstates_t pstate, int offset) {
+nvmlReturn_t nvmlDeviceSetClockOffsetsByIndex(unsigned int index, nvmlClockType_t clockType, nvmlPstates_t pstate, int offset, int debug_mode) {
     init_clock_offset_functions();
     if (!nvmlDeviceSetClockOffsets_ptr) {
         return NVML_ERROR_NOT_SUPPORTED;
@@ -119,7 +119,9 @@ nvmlReturn_t nvmlDeviceSetClockOffsetsByIndex(unsigned int index, nvmlClockType_
     if (nvmlDeviceGetClockOffsets_ptr) {
         ret = nvmlDeviceGetClockOffsets_ptr(device, &info);
         if (ret == NVML_ERROR_INVALID_ARGUMENT || ret == NVML_ERROR_NOT_SUPPORTED) {
-            printf("DEBUG: P-state %d not supported for clock type %d\n", pstate, clockType);
+            if (debug_mode) {
+                printf("DEBUG: P-state %d not supported for clock type %d\n", pstate, clockType);
+            }
             return ret;
         }
     }
@@ -172,6 +174,12 @@ func GetClockOffsetsNative(device nvml.Device, deviceIndex int) (*ClockOffsets, 
 				clockType,
 				pstate,
 				&cOffset,
+				func() C.int {
+					if debug != nil && *debug {
+						return 1
+					}
+					return 0
+				}(),
 			)
 			if ret == C.NVML_SUCCESS {
 				offset := ClockOffset{
@@ -193,11 +201,17 @@ func GetClockOffsetsNative(device nvml.Device, deviceIndex int) (*ClockOffsets, 
 					result.MemOffsets[pstateIdx] = offset
 				}
 
-				fmt.Printf("DEBUG: Successfully read %s P%d offset: %d MHz\n", clockName, pstate, cOffset.clockOffsetMHz)
+				if debug != nil && *debug {
+					fmt.Printf("DEBUG: Successfully read %s P%d offset: %d MHz\n", clockName, pstate, cOffset.clockOffsetMHz)
+				}
 			} else if ret == C.NVML_ERROR_INVALID_ARGUMENT {
-				fmt.Printf("DEBUG: P-state %d not supported for clock type %d\n", pstate, clockType)
+				if debug != nil && *debug {
+					fmt.Printf("DEBUG: P-state %d not supported for clock type %d\n", pstate, clockType)
+				}
 			} else if ret != C.NVML_ERROR_NOT_SUPPORTED {
-				fmt.Printf("DEBUG: Query failed for clock type %d P-state %d: error %d\n", clockType, pstate, ret)
+				if debug != nil && *debug {
+					fmt.Printf("DEBUG: Query failed for clock type %d P-state %d: error %d\n", clockType, pstate, ret)
+				}
 			}
 		}
 	}
@@ -217,11 +231,21 @@ func SetClockOffsetsNative(device nvml.Device, deviceIndex int, config ClockOffs
 			C.NVML_CLOCK_GRAPHICS,
 			C.nvmlPstates_t(pstate),
 			C.int(offset),
+			func() C.int {
+				if debug != nil && *debug {
+					return 1
+				}
+				return 0
+			}(),
 		)
 		if ret == C.NVML_SUCCESS {
-			fmt.Printf("DEBUG: Successfully set GPU P%d offset to %d MHz\n", pstate, offset)
+			if debug != nil && *debug {
+				fmt.Printf("DEBUG: Successfully set GPU P%d offset to %d MHz\n", pstate, offset)
+			}
 		} else if ret == C.NVML_ERROR_INVALID_ARGUMENT {
-			fmt.Printf("DEBUG: GPU P-state %d not supported for setting\n", pstate)
+			if debug != nil && *debug {
+				fmt.Printf("DEBUG: GPU P-state %d not supported for setting\n", pstate)
+			}
 		} else if ret != C.NVML_ERROR_NOT_SUPPORTED {
 			return fmt.Errorf("failed to set GPU P%d clock offset: NVML error %d", pstate, ret)
 		}
@@ -234,11 +258,21 @@ func SetClockOffsetsNative(device nvml.Device, deviceIndex int, config ClockOffs
 			C.NVML_CLOCK_MEM,
 			C.nvmlPstates_t(pstate),
 			C.int(offset),
+			func() C.int {
+				if debug != nil && *debug {
+					return 1
+				}
+				return 0
+			}(),
 		)
 		if ret == C.NVML_SUCCESS {
-			fmt.Printf("DEBUG: Successfully set Memory P%d offset to %d MHz\n", pstate, offset)
+			if debug != nil && *debug {
+				fmt.Printf("DEBUG: Successfully set Memory P%d offset to %d MHz\n", pstate, offset)
+			}
 		} else if ret == C.NVML_ERROR_INVALID_ARGUMENT {
-			fmt.Printf("DEBUG: Memory P-state %d not supported for setting\n", pstate)
+			if debug != nil && *debug {
+				fmt.Printf("DEBUG: Memory P-state %d not supported for setting\n", pstate)
+			}
 		} else if ret != C.NVML_ERROR_NOT_SUPPORTED {
 			return fmt.Errorf("failed to set Memory P%d clock offset: NVML error %d", pstate, ret)
 		}
@@ -261,6 +295,12 @@ func ResetClockOffsetsNative(device nvml.Device, deviceIndex int) error {
 				clockType,
 				pstate,
 				C.int(0),
+				func() C.int {
+					if debug != nil && *debug {
+						return 1
+					}
+					return 0
+				}(),
 			)
 
 			if ret == C.NVML_SUCCESS {
@@ -268,13 +308,17 @@ func ResetClockOffsetsNative(device nvml.Device, deviceIndex int) error {
 				if clockType == C.NVML_CLOCK_MEM {
 					clockName = "Memory"
 				}
-				fmt.Printf("DEBUG: Reset %s P%d offset to 0 MHz on GPU %d\n", clockName, pstate, deviceIndex)
+				if debug != nil && *debug {
+					fmt.Printf("DEBUG: Reset %s P%d offset to 0 MHz on GPU %d\n", clockName, pstate, deviceIndex)
+				}
 			} else if ret == C.NVML_ERROR_INVALID_ARGUMENT {
 				// P-state not supported, skip silently
 				continue
 			} else if ret != C.NVML_ERROR_NOT_SUPPORTED {
 				// Log error but continue resetting other offsets
-				fmt.Printf("DEBUG: Failed to reset clock type %d P-state %d: error %d\n", clockType, pstate, ret)
+				if debug != nil && *debug {
+					fmt.Printf("DEBUG: Failed to reset clock type %d P-state %d: error %d\n", clockType, pstate, ret)
+				}
 			}
 		}
 	}

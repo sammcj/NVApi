@@ -187,37 +187,36 @@ func main() {
 
 	processData := processNamesAndMemoryUsage(&GPUInfo{})
 	processTable := widget.NewTable(
-			// Define the number of rows and columns based on the data
-			func() (int, int) {
-					return len(processData), 2
-			},
-			// Create a new row widget for each cell
-			func() fyne.CanvasObject {
-					return NewProcessRow("")
-			},
-			// Populate data into each cell
-			func(i widget.TableCellID, o fyne.CanvasObject) {
-					row := o.(*ProcessRow)
-					// Cleanup the process name
-					procPath := processData[i.Row][0]
-					procName := procPath[strings.LastIndex(procPath, "/")+1:]
-					// Set the name and memory usage for each row
-					if i.Col == 0 {
-							row.SetName(procName)
-					} else {
-							row.SetMemoryUsage(processData[i.Row][1])
-					}
-			},
+		// Define the number of rows and columns based on the data
+		func() (int, int) {
+			return len(processData), 2
+		},
+		// Create a new row widget for each cell
+		func() fyne.CanvasObject {
+			return NewProcessRow("")
+		},
+		// Populate data into each cell
+		func(i widget.TableCellID, o fyne.CanvasObject) {
+			row := o.(*ProcessRow)
+			// Cleanup the process name
+			procPath := processData[i.Row][0]
+			procName := procPath[strings.LastIndex(procPath, "/")+1:]
+			// Set the name and memory usage for each row
+			if i.Col == 0 {
+				row.SetName(procName)
+			} else {
+				row.SetMemoryUsage(processData[i.Row][1])
+			}
+		},
 	)
 
 	// Set a fixed height for the process table
 	processContainer := container.NewVBox(
-			processTable,
+		processTable,
 	)
 
 	// Main content layout with the process table
 	mainContent := container.NewVBox(infoContent, widget.NewLabel("Processes:"), processContainer)
-
 
 	w.SetContent(mainContent)
 	w.Resize(fyne.NewSize(600, 600))
@@ -244,7 +243,6 @@ func main() {
 			processData = processNamesAndMemoryUsage(gpuInfo)
 			// correctly size the table to the number of processes
 			processTable.Resize(fyne.NewSize(600, float32(30*len(processData))))
-
 
 			// Refresh the process table with new data
 			processTable.Refresh()
