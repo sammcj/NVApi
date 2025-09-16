@@ -16,12 +16,8 @@ A lightweight API that returns Nvidia GPU utilisation information and allows for
   - [Query Parameters](#query-parameters)
   - [Example Response](#example-response)
     - [Automated Power Limiting](#automated-power-limiting)
-      - [Configuration](#configuration)
-      - [Example Configuration](#example-configuration)
-      - [Behaviour](#behaviour)
-      - [Partial Configuration Behaviour](#partial-configuration-behaviour)
-      - [Total Power Cap Only Configuration](#total-power-cap-only-configuration)
     - [PCIe Link Speed](#pcie-link-speed)
+    - [GPU Clock Offsets](#gpu-clock-offsets)
     - [Home Assistant Integration](#home-assistant-integration)
   - [NVApi-Tray GUI](#nvapi-tray-gui)
   - [License](#license)
@@ -267,6 +263,147 @@ Per-GPU configuration:
 `GPU_0_PCIE_IDLE_THRESHOLD=45` sets a 45-second idle threshold for GPU 0.
 `GPU_0_PCIE_MIN_SPEED=2` sets the minimum PCIe speed for GPU 0 to 2.
 `GPU_0_PCIE_MAX_SPEED=4` sets the maximum PCIe speed for GPU 0 to 4.
+
+### GPU Clock Offsets
+
+NVApi supports GPU memory and core clock offset functionality similar to LACT (Linux GPU Configuration Tool). This allows you to adjust GPU and memory clock speeds by specific MHz offsets per performance state for enhanced performance or power efficiency.
+
+**Implementation:**
+- **Native Go implementation** using NVIDIA NVML C API for optimal performance
+- **CUDA 12.x/13.x compatibility** with driver 555+ requirement
+
+**Requirements:**
+- NVIDIA GPU with driver 555+ (required for clock offset functionality)
+- Appropriate GPU driver permissions for clock modification
+
+#### Environment Variable Configuration
+
+Configure clock offsets using environment variables with the following patterns:
+
+**By GPU Index:**
+```bash
+# GPU core clock offsets (P-state specific)
+export GPU_0_OFFSET_P0_CORE=50    # +50 MHz for P0 (highest performance, heat)
+export GPU_0_OFFSET_P1_CORE=-50   # -50 MHz for P1
+export GPU_0_OFFSET_P2_CORE=-100  # -100 MHz for P2 (lower performance, cooler)
+
+# GPU memory clock offsets
+export GPU_0_OFFSET_P0_MEM=200     # +200 MHz memory for P0 (highest performance, heat)
+export GPU_0_OFFSET_P1_MEM=100     # +100 MHz memory for P1 (lower performance, cooler)
+```
+
+**By GPU UUID:**
+```bash
+# Get GPU UUID first
+nvidia-smi -L
+
+# Use UUID in environment variables
+export GPU_GPU-12345678-1234-1234-1234-123456789012_OFFSET_P0_CORE=-50
+export GPU_GPU-12345678-1234-1234-1234-123456789012_OFFSET_P0_MEM=200
+```
+
+**Performance States (P-States):**
+- P0: Maximum performance state (highest clocks)
+- P1-P2: Intermediate performance states
+- P3-P7: Lower performance states (power saving)
+
+**Auto-Reset Behaviour:**
+- If no clock offset configuration is provided for a GPU, nvapi will automatically reset any existing non-default offsets to 0
+- This helps detect and reset offsets that may have been set by other tools
+- A log message will indicate which offsets were reset from non-default values
+
+#### HTTP API Endpoints for Clock Offsets
+
+**Get Current Clock Offsets:**
+```bash
+curl http://localhost:9999/gpu/0/offsets
+```
+
+**Set Clock Offsets:**
+```bash
+curl -X POST http://localhost:9999/gpu/0/offsets \
+  -H "Content-Type: application/json" \
+  -d '{
+    "gpu_offsets": {"P0": 150, "P1": 100},
+    "mem_offsets": {"P0": 500, "P1": 300}
+  }'
+```
+
+**Reset to Stock Clocks:**
+```bash
+curl -X POST http://localhost:9999/gpu/0/offsets/reset
+```
+
+**Get Supported Offset Ranges:**
+```bash
+curl http://localhost:9999/gpu/0/offsets/ranges
+```
+
+#### Example Response with Clock Offsets
+
+```json
+{
+  "index": 0,
+  "name": "NVIDIA GeForce RTX 4090",
+  "gpu_utilisation": 45,
+  "power_watts": 320,
+  "temperature": 67,
+  "clock_offsets": {
+    "gpu_offsets": {
+      "0": {"current": 150, "min": -500, "max": 500},
+      "1": {"current": 100, "min": -400, "max": 400}
+    },
+    "mem_offsets": {
+      "0": {"current": 500, "min": -1000, "max": 1000},
+      "1": {"current": 300, "min": -800, "max": 800}
+    },
+    "gpu_clock_range": [300, 2520],
+    "vram_clock_range": [405, 1313]
+  }
+}
+```
+
+#### Docker Configuration for Clock Offsets
+
+```yaml
+services:
+  nvapi:
+    image: ghcr.io/sammcj/nvapi/nvapi:latest
+    pid: host
+    ports:
+      - 9999:9999
+    environment:
+      # Clock offset configuration
+      GPU_0_OFFSET_P0_CORE: 150
+      GPU_0_OFFSET_P0_MEM: 500
+      GPU_0_OFFSET_P2_CORE: -100
+    cap_add:
+      - SYS_ADMIN # Required for clock modifications
+    volumes:
+      - /usr/bin/python3:/usr/bin/python3:ro  # Mount Python if needed
+```
+
+#### Safety Considerations
+
+No responsibility is taken for any damage caused by improper use of clock offsets. Use at your own risk!
+
+**Offset Limits:**
+- **Conservative Range:** ±100 MHz for daily use
+- **Safe Maximum:** ±100 MHz for GPU core, ±200 MHz for memory
+- **Absolute Limit:** See vendor documentation (API enforced ±1000 MHz)
+
+**Important Warnings:**
+- Clock offset modification can void your GPU warranty
+- Excessive offsets may cause system instability, crashes, or hardware damage
+- Start with small offsets (+50-100 MHz) and test stability
+- Monitor temperatures and power consumption after applying offsets
+- The application automatically resets offsets to stock values on exit
+
+**Testing Stability:**
+1. Apply conservative offsets first
+2. Run GPU stress tests (e.g., FurMark, Unigine Heaven)
+3. Monitor for artifacts, crashes, or excessive temperatures
+4. Incrementally increase offsets while maintaining stability
 
 ### Home Assistant Integration
 
@@ -550,6 +687,6 @@ go build
 
 ## License
 
-Copyright 2024 Sam McLeod
+Copyright 2025 Sam McLeod
 
 This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
