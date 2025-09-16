@@ -21,18 +21,18 @@ import (
 const version = "1.3.3"
 
 type GPUInfo struct {
-	Index              uint          `json:"index"`
-	UUID               string        `json:"uuid"`
-	Name               string        `json:"name"`
-	GPUUtilisation     uint          `json:"gpu_utilisation"`
-	MemoryUtilisation  uint          `json:"memory_utilisation"`
-	PowerWatts         uint          `json:"power_watts"`
-	PowerLimitWatts    uint          `json:"power_limit_watts"`
-	MemoryTotal        float64       `json:"memory_total_gb"`
-	MemoryUsed         float64       `json:"memory_used_gb"`
-	MemoryFree         float64       `json:"memory_free_gb"`
-	MemoryUsagePercent int           `json:"memory_usage_percent"`
-	Temperature        uint          `json:"temperature"`
+	Index              uint    `json:"index"`
+	UUID               string  `json:"uuid"`
+	Name               string  `json:"name"`
+	GPUUtilisation     uint    `json:"gpu_utilisation"`
+	MemoryUtilisation  uint    `json:"memory_utilisation"`
+	PowerWatts         uint    `json:"power_watts"`
+	PowerLimitWatts    uint    `json:"power_limit_watts"`
+	MemoryTotal        float64 `json:"memory_total_gb"`
+	MemoryUsed         float64 `json:"memory_used_gb"`
+	MemoryFree         float64 `json:"memory_free_gb"`
+	MemoryUsagePercent int     `json:"memory_usage_percent"`
+	Temperature        uint    `json:"temperature"`
 	// FanSpeed           *uint         `json:"fan_speed,omitempty"`
 	Processes     []ProcessInfo `json:"processes"`
 	PCIeLinkState string        `json:"pcie_link_state"`
@@ -73,8 +73,8 @@ type ClockOffset struct {
 
 // ClockOffsets holds all clock offset information for a GPU
 type ClockOffsets struct {
-	GPUOffsets map[uint32]ClockOffset `json:"gpu_offsets"`            // P-state → GPU offset
-	MemOffsets map[uint32]ClockOffset `json:"mem_offsets"`            // P-state → Memory offset
+	GPUOffsets map[uint32]ClockOffset `json:"gpu_offsets"` // P-state → GPU offset
+	MemOffsets map[uint32]ClockOffset `json:"mem_offsets"` // P-state → Memory offset
 	GPURange   *[2]uint32             `json:"gpu_clock_range,omitempty"`
 	VRAMRange  *[2]uint32             `json:"vram_clock_range,omitempty"`
 }
@@ -502,13 +502,27 @@ func parseTempPowerLimits() error {
 func parseClockOffsetConfig() error {
 	gpuClockOffsetConfigs = make(map[int]ClockOffsetConfig)
 
+	if *debug {
+		log.Printf("Debug: Starting clock offset configuration parsing...")
+	}
+
 	uuidToIndex, err := mapUUIDsToIndices()
 	if err != nil {
 		return fmt.Errorf("failed to map UUIDs to indices: %v", err)
 	}
 
+	if *debug {
+		log.Printf("Debug: UUID to Index mapping:")
+		for uuid, idx := range uuidToIndex {
+			log.Printf("  %s -> %d", uuid, idx)
+		}
+	}
+
 	for _, env := range os.Environ() {
 		if strings.HasPrefix(env, "GPU_") && strings.Contains(env, "_OFFSET_") {
+			if *debug {
+				log.Printf("Debug: Found clock offset env var: %s", env)
+			}
 			// Parse patterns like:
 			// GPU_UUID_OFFSET_P0_CORE=+150
 			// GPU_UUID_OFFSET_P0_MEM=+500
@@ -524,6 +538,9 @@ func parseClockOffsetConfig() error {
 
 			// Extract UUID, P-state, and clock type from key
 			if uuid, pstate, clockType, err := parseOffsetEnvKey(key); err == nil {
+				if *debug {
+					log.Printf("Debug: Parsed key - UUID: %s, P-state: %d, Clock type: %s", uuid, pstate, clockType)
+				}
 				var idx int
 				var exists bool
 
@@ -560,8 +577,14 @@ func parseClockOffsetConfig() error {
 				config := gpuClockOffsetConfigs[idx]
 				if clockType == "CORE" {
 					config.GPUOffsets[pstate] = int32(offset)
+					if *debug {
+						log.Printf("Debug: Set GPU P%d offset to %d MHz for device %d", pstate, offset, idx)
+					}
 				} else if clockType == "MEM" {
 					config.MemOffsets[pstate] = int32(offset)
+					if *debug {
+						log.Printf("Debug: Set Memory P%d offset to %d MHz for device %d", pstate, offset, idx)
+					}
 				}
 				gpuClockOffsetConfigs[idx] = config
 			}
@@ -647,13 +670,13 @@ func setClockOffset(device nvml.Device, clockType string, pstate uint32, offsetM
 	if ret != nvml.SUCCESS {
 		return fmt.Errorf("unable to get device index: %v", nvml.ErrorString(ret))
 	}
-	
+
 	// Create config for single offset
 	config := ClockOffsetConfig{
 		GPUOffsets: make(map[uint32]int32),
 		MemOffsets: make(map[uint32]int32),
 	}
-	
+
 	if clockType == "core" || clockType == "gpu" {
 		config.GPUOffsets[pstate] = offsetMHz
 	} else if clockType == "mem" || clockType == "memory" {
@@ -661,7 +684,7 @@ func setClockOffset(device nvml.Device, clockType string, pstate uint32, offsetM
 	} else {
 		return fmt.Errorf("invalid clock type: %s", clockType)
 	}
-	
+
 	// Use native NVML implementation (requires driver 555+)
 	return SetClockOffsetsNative(device, int(deviceIndex), config)
 }
@@ -672,12 +695,12 @@ func applyClockOffsets(deviceIndex int) error {
 	if ret != nvml.SUCCESS {
 		return fmt.Errorf("unable to get device %d: %v", deviceIndex, nvml.ErrorString(ret))
 	}
-	
+
 	config, exists := gpuClockOffsetConfigs[deviceIndex]
 	if !exists {
 		return nil // No offsets configured for this GPU
 	}
-	
+
 	// Apply GPU core offsets
 	for pstate, offset := range config.GPUOffsets {
 		if err := setClockOffset(device, "core", pstate, offset); err != nil {
@@ -685,7 +708,7 @@ func applyClockOffsets(deviceIndex int) error {
 		}
 		log.Printf("Applied GPU offset %+d MHz to P-state %d on GPU %d", offset, pstate, deviceIndex)
 	}
-	
+
 	// Apply memory offsets
 	for pstate, offset := range config.MemOffsets {
 		if err := setClockOffset(device, "mem", pstate, offset); err != nil {
@@ -693,28 +716,28 @@ func applyClockOffsets(deviceIndex int) error {
 		}
 		log.Printf("Applied memory offset %+d MHz to P-state %d on GPU %d", offset, pstate, deviceIndex)
 	}
-	
+
 	// Cache applied offsets for reporting
 	offsetsMutex.Lock()
 	if lastAppliedOffsets == nil {
 		lastAppliedOffsets = make(map[int]ClockOffsets)
 	}
-	
+
 	appliedOffsets := ClockOffsets{
 		GPUOffsets: make(map[uint32]ClockOffset),
 		MemOffsets: make(map[uint32]ClockOffset),
 	}
-	
+
 	for pstate, offset := range config.GPUOffsets {
 		appliedOffsets.GPUOffsets[pstate] = ClockOffset{Current: offset, Min: -500, Max: 500}
 	}
 	for pstate, offset := range config.MemOffsets {
 		appliedOffsets.MemOffsets[pstate] = ClockOffset{Current: offset, Min: -1000, Max: 1000}
 	}
-	
+
 	lastAppliedOffsets[deviceIndex] = appliedOffsets
 	offsetsMutex.Unlock()
-	
+
 	return nil
 }
 
@@ -724,18 +747,18 @@ func resetClockOffsets(deviceIndex int) error {
 	if ret != nvml.SUCCESS {
 		return fmt.Errorf("unable to get device %d: %v", deviceIndex, nvml.ErrorString(ret))
 	}
-	
+
 	// Use native NVML implementation (requires driver 555+)
 	err := ResetClockOffsetsNative(device, deviceIndex)
 	if err != nil {
 		return fmt.Errorf("failed to reset clock offsets: %v", err)
 	}
-	
+
 	// Clear cached offsets
 	offsetsMutex.Lock()
 	delete(lastAppliedOffsets, deviceIndex)
 	offsetsMutex.Unlock()
-	
+
 	log.Printf("Reset all clock offsets to stock values for GPU %d", deviceIndex)
 	return nil
 }
@@ -746,7 +769,7 @@ func resetToDefaultsWithLogging(deviceIndex int) error {
 	if ret != nvml.SUCCESS {
 		return fmt.Errorf("unable to get device %d: %v", deviceIndex, nvml.ErrorString(ret))
 	}
-	
+
 	// Get current offsets first to check if they're non-default
 	currentOffsets, err := getClockOffsets(device, deviceIndex)
 	if err != nil {
@@ -755,62 +778,62 @@ func resetToDefaultsWithLogging(deviceIndex int) error {
 		}
 		return nil // Don't fail if we can't read current offsets
 	}
-	
+
 	// Check if there are any non-zero offsets to log
 	hasNonDefaultOffsets := false
 	var nonDefaultOffsets []string
-	
+
 	for pstate, offset := range currentOffsets.GPUOffsets {
 		if offset.Current != 0 {
 			hasNonDefaultOffsets = true
 			nonDefaultOffsets = append(nonDefaultOffsets, fmt.Sprintf("GPU P%d: %+d MHz", pstate, offset.Current))
 		}
 	}
-	
+
 	for pstate, offset := range currentOffsets.MemOffsets {
 		if offset.Current != 0 {
 			hasNonDefaultOffsets = true
 			nonDefaultOffsets = append(nonDefaultOffsets, fmt.Sprintf("Memory P%d: %+d MHz", pstate, offset.Current))
 		}
 	}
-	
+
 	if hasNonDefaultOffsets {
-		log.Printf("GPU %d: No clock offset configuration found, resetting non-default offsets to 0: %s", 
+		log.Printf("GPU %d: No clock offset configuration found, resetting non-default offsets to 0: %s",
 			deviceIndex, strings.Join(nonDefaultOffsets, ", "))
 	}
-	
+
 	// Reset to defaults
 	err = resetClockOffsets(deviceIndex)
 	if err != nil {
 		return fmt.Errorf("failed to reset to defaults: %v", err)
 	}
-	
+
 	if hasNonDefaultOffsets {
 		log.Printf("GPU %d: Successfully reset all clock offsets to default (0)", deviceIndex)
 	}
-	
+
 	return nil
 }
 
 // validateOffsets ensures offset values are within reasonable ranges
 func validateOffsets(req OffsetRequest) error {
-	const maxOffset = 1000 // MHz
+	const maxOffset = 1000  // MHz
 	const minOffset = -1000 // MHz
-	
+
 	for pstate, offset := range req.GPUOffsets {
 		if offset < minOffset || offset > maxOffset {
 			return fmt.Errorf("GPU offset %d MHz for %s outside safe range [%d, %d]",
-							  offset, pstate, minOffset, maxOffset)
+				offset, pstate, minOffset, maxOffset)
 		}
 	}
-	
+
 	for pstate, offset := range req.MemOffsets {
 		if offset < minOffset || offset > maxOffset {
 			return fmt.Errorf("memory offset %d MHz for %s outside safe range [%d, %d]",
-							  offset, pstate, minOffset, maxOffset)
+				offset, pstate, minOffset, maxOffset)
 		}
 	}
-	
+
 	return nil
 }
 
@@ -819,11 +842,11 @@ func checkClockOffsetSupport() error {
 	if !IsNativeClockOffsetSupported() {
 		return fmt.Errorf("native clock offset support not available - requires NVIDIA driver 555+")
 	}
-	
+
 	if *debug {
 		log.Printf("Native clock offset support available")
 	}
-	
+
 	return nil
 }
 
@@ -833,11 +856,11 @@ func validateDeviceIndex(deviceIndex int) error {
 	if ret != nvml.SUCCESS {
 		return fmt.Errorf("unable to get device count: %v", nvml.ErrorString(ret))
 	}
-	
+
 	if deviceIndex < 0 || deviceIndex >= int(count) {
 		return fmt.Errorf("invalid device index %d. Available devices: 0-%d", deviceIndex, int(count)-1)
 	}
-	
+
 	return nil
 }
 
@@ -854,31 +877,31 @@ func safeApplyClockOffsets(deviceIndex int) error {
 	if err := validateDeviceIndex(deviceIndex); err != nil {
 		return fmt.Errorf("device validation failed: %v", err)
 	}
-	
+
 	config, exists := gpuClockOffsetConfigs[deviceIndex]
 	if !exists {
 		// No offsets configured - reset to defaults and check if there were existing offsets
 		return resetToDefaultsWithLogging(deviceIndex)
 	}
-	
+
 	// Validate all P-states before applying any offsets
 	for pstate := range config.GPUOffsets {
 		if err := validatePStateRange(pstate); err != nil {
 			return fmt.Errorf("GPU offset validation failed: %v", err)
 		}
 	}
-	
+
 	for pstate := range config.MemOffsets {
 		if err := validatePStateRange(pstate); err != nil {
 			return fmt.Errorf("memory offset validation failed: %v", err)
 		}
 	}
-	
+
 	device, ret := nvml.DeviceGetHandleByIndex(deviceIndex)
 	if ret != nvml.SUCCESS {
 		return fmt.Errorf("unable to get device %d: %v", deviceIndex, nvml.ErrorString(ret))
 	}
-	
+
 	// Use native bulk implementation (requires driver 555+)
 	err := SetClockOffsetsNative(device, deviceIndex, config)
 	if err == nil {
@@ -887,12 +910,12 @@ func safeApplyClockOffsets(deviceIndex int) error {
 		if lastAppliedOffsets == nil {
 			lastAppliedOffsets = make(map[int]ClockOffsets)
 		}
-		
+
 		appliedOffsets := ClockOffsets{
 			GPUOffsets: make(map[uint32]ClockOffset),
 			MemOffsets: make(map[uint32]ClockOffset),
 		}
-		
+
 		for pstate, offset := range config.GPUOffsets {
 			appliedOffsets.GPUOffsets[pstate] = ClockOffset{Current: offset, Min: -500, Max: 500}
 			log.Printf("Applied GPU offset %+d MHz to P-state %d on GPU %d (native)", offset, pstate, deviceIndex)
@@ -901,16 +924,16 @@ func safeApplyClockOffsets(deviceIndex int) error {
 			appliedOffsets.MemOffsets[pstate] = ClockOffset{Current: offset, Min: -1000, Max: 1000}
 			log.Printf("Applied memory offset %+d MHz to P-state %d on GPU %d (native)", offset, pstate, deviceIndex)
 		}
-		
+
 		lastAppliedOffsets[deviceIndex] = appliedOffsets
 		offsetsMutex.Unlock()
-		
+
 		return nil
 	}
-	
+
 	// Fallback to individual offset application
 	var errors []string
-	
+
 	// Apply GPU core offsets
 	for pstate, offset := range config.GPUOffsets {
 		if err := setClockOffset(device, "core", pstate, offset); err != nil {
@@ -919,7 +942,7 @@ func safeApplyClockOffsets(deviceIndex int) error {
 			log.Printf("Applied GPU offset %+d MHz to P-state %d on GPU %d", offset, pstate, deviceIndex)
 		}
 	}
-	
+
 	// Apply memory offsets
 	for pstate, offset := range config.MemOffsets {
 		if err := setClockOffset(device, "mem", pstate, offset); err != nil {
@@ -928,32 +951,32 @@ func safeApplyClockOffsets(deviceIndex int) error {
 			log.Printf("Applied memory offset %+d MHz to P-state %d on GPU %d", offset, pstate, deviceIndex)
 		}
 	}
-	
+
 	if len(errors) > 0 {
 		return fmt.Errorf("some offsets failed to apply: %s", strings.Join(errors, "; "))
 	}
-	
+
 	// Cache applied offsets for reporting
 	offsetsMutex.Lock()
 	if lastAppliedOffsets == nil {
 		lastAppliedOffsets = make(map[int]ClockOffsets)
 	}
-	
+
 	appliedOffsets := ClockOffsets{
 		GPUOffsets: make(map[uint32]ClockOffset),
 		MemOffsets: make(map[uint32]ClockOffset),
 	}
-	
+
 	for pstate, offset := range config.GPUOffsets {
 		appliedOffsets.GPUOffsets[pstate] = ClockOffset{Current: offset, Min: -500, Max: 500}
 	}
 	for pstate, offset := range config.MemOffsets {
 		appliedOffsets.MemOffsets[pstate] = ClockOffset{Current: offset, Min: -1000, Max: 1000}
 	}
-	
+
 	lastAppliedOffsets[deviceIndex] = appliedOffsets
 	offsetsMutex.Unlock()
-	
+
 	return nil
 }
 
@@ -1148,7 +1171,7 @@ func extractGPUIndex(path string) (int, error) {
 	if len(parts) < 2 {
 		return 0, fmt.Errorf("invalid path format")
 	}
-	
+
 	return strconv.Atoi(parts[1])
 }
 
@@ -1221,13 +1244,13 @@ func handleGPURoutes(w http.ResponseWriter, r *http.Request) {
 // handleGPUOffsetRoutes routes clock offset API requests
 func handleGPUOffsetRoutes(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
-	
+
 	// Parse routes like:
 	// GET  /gpu/0/offsets
 	// POST /gpu/0/offsets
 	// POST /gpu/0/offsets/reset
 	// GET  /gpu/0/offsets/ranges
-	
+
 	if strings.HasSuffix(path, "/offsets/reset") {
 		if r.Method != "POST" {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -1236,7 +1259,7 @@ func handleGPUOffsetRoutes(w http.ResponseWriter, r *http.Request) {
 		handleResetOffsets(w, r)
 		return
 	}
-	
+
 	if strings.HasSuffix(path, "/offsets/ranges") {
 		if r.Method != "GET" {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -1245,7 +1268,7 @@ func handleGPUOffsetRoutes(w http.ResponseWriter, r *http.Request) {
 		handleGetOffsetRanges(w, r)
 		return
 	}
-	
+
 	if strings.HasSuffix(path, "/offsets") {
 		switch r.Method {
 		case "GET":
@@ -1257,7 +1280,7 @@ func handleGPUOffsetRoutes(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	
+
 	// If no offset-related endpoint matched, fall back to original GPU handler
 	http.NotFound(w, r)
 }
@@ -1269,26 +1292,26 @@ func handleGetOffsets(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Invalid GPU index: %v", err), http.StatusBadRequest)
 		return
 	}
-	
+
 	device, ret := nvml.DeviceGetHandleByIndex(deviceIndex)
 	if ret != nvml.SUCCESS {
 		http.Error(w, fmt.Sprintf("Unable to get device: %v", nvml.ErrorString(ret)),
-				   http.StatusInternalServerError)
+			http.StatusInternalServerError)
 		return
 	}
-	
+
 	offsets, err := getClockOffsets(device, deviceIndex)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Unable to get offsets: %v", err),
-				   http.StatusInternalServerError)
+			http.StatusInternalServerError)
 		return
 	}
-	
+
 	response := OffsetResponse{
 		Success:      true,
 		ClockOffsets: offsets,
 	}
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
@@ -1300,44 +1323,44 @@ func handleSetOffsets(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Invalid GPU index: %v", err), http.StatusBadRequest)
 		return
 	}
-	
+
 	var req OffsetRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
 		return
 	}
-	
+
 	// Validate offset ranges
 	if err := validateOffsets(req); err != nil {
 		http.Error(w, fmt.Sprintf("Invalid offsets: %v", err), http.StatusBadRequest)
 		return
 	}
-	
+
 	// Convert string P-states to uint32
 	config := ClockOffsetConfig{
 		GPUOffsets: make(map[uint32]int32),
 		MemOffsets: make(map[uint32]int32),
 	}
-	
+
 	for pstateStr, offset := range req.GPUOffsets {
 		pstate := parsePStateString(pstateStr)
 		config.GPUOffsets[pstate] = offset
 	}
-	
+
 	for pstateStr, offset := range req.MemOffsets {
 		pstate := parsePStateString(pstateStr)
 		config.MemOffsets[pstate] = offset
 	}
-	
+
 	// Store configuration and apply
 	gpuClockOffsetConfigs[deviceIndex] = config
-	
+
 	if err := safeApplyClockOffsets(deviceIndex); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to apply offsets: %v", err),
-				   http.StatusInternalServerError)
+			http.StatusInternalServerError)
 		return
 	}
-	
+
 	response := OffsetResponse{
 		Success: true,
 		Message: "Clock offsets applied successfully",
@@ -1346,7 +1369,7 @@ func handleSetOffsets(w http.ResponseWriter, r *http.Request) {
 			"mem_offsets": req.MemOffsets,
 		},
 	}
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
@@ -1358,21 +1381,21 @@ func handleResetOffsets(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Invalid GPU index: %v", err), http.StatusBadRequest)
 		return
 	}
-	
+
 	if err := resetClockOffsets(deviceIndex); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to reset offsets: %v", err),
-				   http.StatusInternalServerError)
+			http.StatusInternalServerError)
 		return
 	}
-	
+
 	// Clear stored configuration
 	delete(gpuClockOffsetConfigs, deviceIndex)
-	
+
 	response := OffsetResponse{
 		Success: true,
 		Message: "Clock offsets reset to stock values",
 	}
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
@@ -1384,28 +1407,28 @@ func handleGetOffsetRanges(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Invalid GPU index: %v", err), http.StatusBadRequest)
 		return
 	}
-	
+
 	device, ret := nvml.DeviceGetHandleByIndex(deviceIndex)
 	if ret != nvml.SUCCESS {
 		http.Error(w, fmt.Sprintf("Unable to get device: %v", nvml.ErrorString(ret)),
-				   http.StatusInternalServerError)
+			http.StatusInternalServerError)
 		return
 	}
-	
+
 	offsets, err := getClockOffsets(device, deviceIndex)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Unable to get offset ranges: %v", err),
-				   http.StatusInternalServerError)
+			http.StatusInternalServerError)
 		return
 	}
-	
+
 	ranges := map[string]interface{}{
 		"gpu_offset_ranges": offsets.GPUOffsets,
 		"mem_offset_ranges": offsets.MemOffsets,
 		"gpu_clock_range":   offsets.GPURange,
 		"vram_clock_range":  offsets.VRAMRange,
 	}
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(ranges)
 }
@@ -1522,10 +1545,20 @@ func main() {
 		}
 	}
 
-	// Apply initial offset configuration
-	for deviceIndex := range gpuClockOffsetConfigs {
-		if err := safeApplyClockOffsets(deviceIndex); err != nil {
-			log.Printf("Warning: Failed to apply initial offsets for GPU %d: %v", deviceIndex, err)
+	// Apply initial offset configuration or reset to defaults
+	if len(gpuClockOffsetConfigs) > 0 {
+		// Apply configured offsets
+		for deviceIndex := range gpuClockOffsetConfigs {
+			if err := safeApplyClockOffsets(deviceIndex); err != nil {
+				log.Printf("Warning: Failed to apply initial offsets for GPU %d: %v", deviceIndex, err)
+			}
+		}
+	} else {
+		// No configurations found - check all GPUs and reset any non-default offsets
+		for i := 0; i < int(count); i++ {
+			if err := safeApplyClockOffsets(i); err != nil {
+				log.Printf("Warning: Failed to check/reset offsets for GPU %d: %v", i, err)
+			}
 		}
 	}
 
@@ -1575,10 +1608,9 @@ func main() {
 		}
 	})
 
-
 	// GPU endpoints (both original and clock offset management)
-	http.HandleFunc("/gpu", handleOriginalGPURoute)  // For exact /gpu routes
-	http.HandleFunc("/gpu/", handleGPURoutes)        // For /gpu/* routes
+	http.HandleFunc("/gpu", handleOriginalGPURoute) // For exact /gpu routes
+	http.HandleFunc("/gpu/", handleGPURoutes)       // For /gpu/* routes
 
 	log.Printf("Server starting on port %d", *port)
 	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", *port), nil))
