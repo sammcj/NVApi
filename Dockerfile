@@ -12,7 +12,7 @@ COPY . /app
 
 
 # build the binary so it's portable and can run in a scratch container
-RUN go build -o /app/nvapi main.go && \
+RUN go build -o /app/nvapi . && \
   chmod +x /app/nvapi
 
 # Runtime stage
