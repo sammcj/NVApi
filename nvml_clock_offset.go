@@ -52,12 +52,6 @@ void init_clock_offset_functions() {
     if (handle) {
         nvmlDeviceGetClockOffsets_ptr = (nvmlDeviceGetClockOffsets_t)dlsym(handle, "nvmlDeviceGetClockOffsets");
         nvmlDeviceSetClockOffsets_ptr = (nvmlDeviceSetClockOffsets_t)dlsym(handle, "nvmlDeviceSetClockOffsets");
-
-        // Debug: check if functions were loaded
-        printf("DEBUG: dlsym nvmlDeviceGetClockOffsets: %p\n", nvmlDeviceGetClockOffsets_ptr);
-        printf("DEBUG: dlsym nvmlDeviceSetClockOffsets: %p\n", nvmlDeviceSetClockOffsets_ptr);
-    } else {
-        printf("DEBUG: dlopen failed: %s\n", dlerror());
     }
 
     clock_offset_functions_loaded = 1;

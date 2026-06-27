@@ -93,16 +93,10 @@ type OffsetRequest struct {
 
 // OffsetResponse represents current offset status
 type OffsetResponse struct {
-	Success      bool                   `json:"success"`
-	Message      string                 `json:"message,omitempty"`
-	ClockOffsets *ClockOffsets          `json:"clock_offsets,omitempty"`
-	Applied      map[string]interface{} `json:"applied,omitempty"`
-}
-
-// Track GPU capabilities
-type GPUCapabilities struct {
-	HasFanSpeedSensor bool
-	FanSpeedSupported bool
+	Success      bool           `json:"success"`
+	Message      string         `json:"message,omitempty"`
+	ClockOffsets *ClockOffsets  `json:"clock_offsets,omitempty"`
+	Applied      map[string]any `json:"applied,omitempty"`
 }
 
 const (
@@ -139,8 +133,11 @@ var (
 	enablePCIeStateManagement = flag.Bool("enable-pcie-state-management", false, "Enable automatic PCIe link state management")
 	pcieStateManager          *PCIeStateManager
 	gpuClockOffsetConfigs     map[int]ClockOffsetConfig // GPU index → offset config
+	configMutex               sync.RWMutex              // Protect gpuClockOffsetConfigs access
 	lastAppliedOffsets        map[int]ClockOffsets      // Track applied offsets for reporting
+	cachedClockOffsets        map[int]*ClockOffsets     // Cached offset readback (refreshed on startup + set/reset, not per poll)
 	offsetsMutex              sync.RWMutex              // Protect offset operations
+	powerCheckMutex           sync.Mutex                // Serialise temperature/power-cap checks
 	rl                        *rateLimiter              // Rate limiter for HTTP requests
 	// gpuCapabilities   []GPUCapabilities
 )
@@ -221,14 +218,14 @@ func parseTotalPowerCap() {
 		return
 	}
 
-	cap, err := strconv.ParseUint(capStr, 10, 32)
+	capValue, err := strconv.ParseUint(capStr, 10, 32)
 	if err != nil {
 		log.Printf("Warning: Invalid GPU_TOTAL_POWER_CAP value. Total power cap will be disabled.")
 		totalPowerCap = 0
 		return
 	}
 
-	totalPowerCap = uint(cap)
+	totalPowerCap = uint(capValue)
 }
 
 func applyTotalPowerCap(devices []nvml.Device) error {
@@ -275,6 +272,10 @@ func applyTotalPowerCap(devices []nvml.Device) error {
 				newLimit = currentPowers[i] - reduction
 			}
 
+			if newLimit == maxPowerLimits[i] {
+				continue // already at target; avoid redundant write that wakes the GPU
+			}
+
 			ret := device.SetPowerManagementLimit(uint32(newLimit * 1000)) // Convert watts to milliwatts
 			if ret != nvml.SUCCESS {
 				return fmt.Errorf("unable to set power management limit for GPU %d: %v", i, nvml.ErrorString(ret))
@@ -283,15 +284,12 @@ func applyTotalPowerCap(devices []nvml.Device) error {
 		}
 	} else if totalPower >= uint(float64(totalPowerCap)*0.98) && totalPower != lastTotalPower {
 		log.Printf("Warning: Total power consumption (%d W) is approaching the cap (%d W)", totalPower, totalPowerCap)
-	} else {
-		// If we're well below the cap, restore original power limits
-		for i, device := range devices {
-			ret := device.SetPowerManagementLimit(uint32(maxPowerLimits[i] * 1000)) // Convert watts to milliwatts
-			if ret != nvml.SUCCESS {
-				return fmt.Errorf("unable to restore power management limit for GPU %d: %v", i, nvml.ErrorString(ret))
-			}
-		}
 	}
+	// Note: there is intentionally no "restore" write here. maxPowerLimits was
+	// just read from each device, so writing it back is a no-op that needlessly
+	// wakes idle GPUs every cycle. Restoring a previously reduced limit would
+	// require the default limit (GetPowerManagementDefaultLimit), not the current
+	// one - see the known total-cap ratchet limitation.
 
 	lastTotalPower = totalPower
 	return nil
@@ -314,6 +312,9 @@ func parseTempCheckInterval() {
 	tempCheckInterval = time.Duration(interval) * time.Second
 }
 func checkAndApplyPowerLimits() error {
+	powerCheckMutex.Lock()
+	defer powerCheckMutex.Unlock()
+
 	if time.Since(lastTempCheckTime) < tempCheckInterval {
 		return nil
 	}
@@ -375,7 +376,15 @@ func (rl *rateLimiter) takeToken() bool {
 }
 
 func (rl *rateLimiter) getCache() []GPUInfo {
-	return *(rl.cache)
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	return *rl.cache
+}
+
+func (rl *rateLimiter) setCache(infos []GPUInfo) {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	*rl.cache = infos
 }
 
 func getProcessInfo(pid uint32) (string, []string, error) {
@@ -385,11 +394,13 @@ func getProcessInfo(pid uint32) (string, []string, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	cmdlineArgs := strings.Split(string(cmdline), "\x00")
-	cmdlineArgs = cmdlineArgs[:len(cmdlineArgs)-1] // remove trailing empty string
-	processName := cmdlineArgs[0]
-	arguments := cmdlineArgs[1:]
-	return processName, arguments, nil
+	// cmdline is NUL-separated and NUL-terminated; kernel threads and exiting
+	// processes can yield an empty file, so guard against an empty split result.
+	cmdlineArgs := strings.Split(strings.TrimRight(string(cmdline), "\x00"), "\x00")
+	if len(cmdlineArgs) == 0 || cmdlineArgs[0] == "" {
+		return "", nil, nil
+	}
+	return cmdlineArgs[0], cmdlineArgs[1:], nil
 }
 
 // parseTempPowerLimits parses the environment variables for temperature-based power limits
@@ -664,6 +675,35 @@ func getClockOffsets(device nvml.Device, deviceIndex int) (*ClockOffsets, error)
 	return GetClockOffsetsNative(device, deviceIndex)
 }
 
+// refreshClockOffsetCache reads offsets from hardware and stores them. Clock
+// offsets are configuration state - they only change when set/reset - so this
+// is called on startup and after a set/reset rather than on every metrics poll,
+// which avoids repeatedly hitting the clock control path (and waking idle GPUs).
+func refreshClockOffsetCache(deviceIndex int) {
+	device, ret := nvml.DeviceGetHandleByIndex(deviceIndex)
+	if ret != nvml.SUCCESS {
+		return
+	}
+	offsets, err := getClockOffsets(device, deviceIndex)
+	if err != nil {
+		return
+	}
+	offsetsMutex.Lock()
+	if cachedClockOffsets == nil {
+		cachedClockOffsets = make(map[int]*ClockOffsets)
+	}
+	cachedClockOffsets[deviceIndex] = offsets
+	offsetsMutex.Unlock()
+}
+
+// getCachedClockOffsets returns the cached offset readback for a device (nil if
+// not yet cached).
+func getCachedClockOffsets(deviceIndex int) *ClockOffsets {
+	offsetsMutex.RLock()
+	defer offsetsMutex.RUnlock()
+	return cachedClockOffsets[deviceIndex]
+}
+
 // setClockOffset applies a clock offset to specific P-state using Python script
 func setClockOffset(device nvml.Device, clockType string, pstate uint32, offsetMHz int32) error {
 	deviceIndex, ret := device.GetIndex()
@@ -687,58 +727,6 @@ func setClockOffset(device nvml.Device, clockType string, pstate uint32, offsetM
 
 	// Use native NVML implementation (requires driver 555+)
 	return SetClockOffsetsNative(device, int(deviceIndex), config)
-}
-
-// applyClockOffsets applies all configured offsets for a GPU
-func applyClockOffsets(deviceIndex int) error {
-	device, ret := nvml.DeviceGetHandleByIndex(deviceIndex)
-	if ret != nvml.SUCCESS {
-		return fmt.Errorf("unable to get device %d: %v", deviceIndex, nvml.ErrorString(ret))
-	}
-
-	config, exists := gpuClockOffsetConfigs[deviceIndex]
-	if !exists {
-		return nil // No offsets configured for this GPU
-	}
-
-	// Apply GPU core offsets
-	for pstate, offset := range config.GPUOffsets {
-		if err := setClockOffset(device, "core", pstate, offset); err != nil {
-			return fmt.Errorf("failed to set GPU offset %+d MHz for P%d: %v", offset, pstate, err)
-		}
-		log.Printf("Applied GPU offset %+d MHz to P-state %d on GPU %d", offset, pstate, deviceIndex)
-	}
-
-	// Apply memory offsets
-	for pstate, offset := range config.MemOffsets {
-		if err := setClockOffset(device, "mem", pstate, offset); err != nil {
-			return fmt.Errorf("failed to set memory offset %+d MHz for P%d: %v", offset, pstate, err)
-		}
-		log.Printf("Applied memory offset %+d MHz to P-state %d on GPU %d", offset, pstate, deviceIndex)
-	}
-
-	// Cache applied offsets for reporting
-	offsetsMutex.Lock()
-	if lastAppliedOffsets == nil {
-		lastAppliedOffsets = make(map[int]ClockOffsets)
-	}
-
-	appliedOffsets := ClockOffsets{
-		GPUOffsets: make(map[uint32]ClockOffset),
-		MemOffsets: make(map[uint32]ClockOffset),
-	}
-
-	for pstate, offset := range config.GPUOffsets {
-		appliedOffsets.GPUOffsets[pstate] = ClockOffset{Current: offset, Min: -500, Max: 500}
-	}
-	for pstate, offset := range config.MemOffsets {
-		appliedOffsets.MemOffsets[pstate] = ClockOffset{Current: offset, Min: -1000, Max: 1000}
-	}
-
-	lastAppliedOffsets[deviceIndex] = appliedOffsets
-	offsetsMutex.Unlock()
-
-	return nil
 }
 
 // resetClockOffsets resets all offsets to 0 (stock clocks)
@@ -878,7 +866,9 @@ func safeApplyClockOffsets(deviceIndex int) error {
 		return fmt.Errorf("device validation failed: %v", err)
 	}
 
+	configMutex.RLock()
 	config, exists := gpuClockOffsetConfigs[deviceIndex]
+	configMutex.RUnlock()
 	if !exists {
 		// No offsets configured - reset to defaults and check if there were existing offsets
 		return resetToDefaultsWithLogging(deviceIndex)
@@ -996,7 +986,18 @@ func applyPowerLimit(device nvml.Device, index int, currentTemp uint) error {
 		newLimit = limits.HighTempLimit
 	}
 
-	ret := device.SetPowerManagementLimit(uint32(newLimit * 1000)) // Convert watts to milliwatts
+	// Only write when the target differs from the current limit. Re-setting the
+	// same value every cycle is a redundant control-path write that wakes idle
+	// GPUs (and defeats runtime power management).
+	current, ret := device.GetPowerManagementLimit()
+	if ret != nvml.SUCCESS {
+		return fmt.Errorf("unable to get current power management limit: %v", nvml.ErrorString(ret))
+	}
+	if uint(current/1000) == newLimit {
+		return nil
+	}
+
+	ret = device.SetPowerManagementLimit(uint32(newLimit * 1000)) // Convert watts to milliwatts
 	if ret != nvml.SUCCESS {
 		return fmt.Errorf("unable to set power management limit: %v", nvml.ErrorString(ret))
 	}
@@ -1094,18 +1095,23 @@ func GetGPUInfo() ([]GPUInfo, error) {
 			return nil, fmt.Errorf("unable to get running processes: %v", nvml.ErrorString(ret))
 		}
 
-		processesInfo := make([]ProcessInfo, len(processes))
-		for j, process := range processes {
+		processesInfo := make([]ProcessInfo, 0, len(processes))
+		for _, process := range processes {
 			processName, arguments, err := getProcessInfo(process.Pid)
 			if err != nil {
-				return nil, err
+				// Process may have exited between enumeration and read; skip it
+				// rather than failing the whole batch.
+				if *debug {
+					log.Printf("Warning: failed to read process info for PID %d: %v", process.Pid, err)
+				}
+				continue
 			}
-			processesInfo[j] = ProcessInfo{
+			processesInfo = append(processesInfo, ProcessInfo{
 				Pid:             process.Pid,
 				UsedGpuMemoryMb: process.UsedGpuMemory / 1024 / 1024,
 				Name:            processName,
 				Arguments:       arguments,
-			}
+			})
 		}
 
 		memoryTotal := float64(memory.Total) / 1024 / 1024 / 1024
@@ -1113,14 +1119,6 @@ func GetGPUInfo() ([]GPUInfo, error) {
 		memoryFree := float64(memory.Free) / 1024 / 1024 / 1024
 		memoryUsagePercent := int(math.Round((float64(memory.Used) / float64(memory.Total)) * 100))
 
-		devices := make([]nvml.Device, count)
-		for i := 0; i < int(count); i++ {
-			device, ret := nvml.DeviceGetHandleByIndex(i)
-			if ret != nvml.SUCCESS {
-				log.Fatalf("unable to get device at index %d: %v", i, nvml.ErrorString(ret))
-			}
-			devices[i] = device
-		}
 		var pcieLinkState string
 		if pcieStateManager != nil {
 			state, err := pcieStateManager.GetCurrentLinkState(i)
@@ -1134,11 +1132,9 @@ func GetGPUInfo() ([]GPUInfo, error) {
 			pcieLinkState = "not managed"
 		}
 
-		// Add clock offset information
-		var clockOffsets *ClockOffsets
-		if offsets, err := getClockOffsets(device, i); err == nil {
-			clockOffsets = offsets
-		}
+		// Clock offsets are read from cache (refreshed on startup + set/reset),
+		// not queried here, to avoid touching the clock control path every poll.
+		clockOffsets := getCachedClockOffsets(i)
 
 		gpuInfo := GPUInfo{
 			Index:              uint(index),
@@ -1179,22 +1175,22 @@ func extractGPUIndex(path string) (int, error) {
 func handleOriginalGPURoute(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	pathToField := map[string]func(*GPUInfo) interface{}{
-		"/gpu/index":                func(gpuInfo *GPUInfo) interface{} { return gpuInfo.Index },
-		"/gpu/uuid":                 func(gpuInfo *GPUInfo) interface{} { return gpuInfo.UUID },
-		"/gpu/name":                 func(gpuInfo *GPUInfo) interface{} { return gpuInfo.Name },
-		"/gpu/gpu_utilisation":      func(gpuInfo *GPUInfo) interface{} { return gpuInfo.GPUUtilisation },
-		"/gpu/memory_utilisation":   func(gpuInfo *GPUInfo) interface{} { return gpuInfo.MemoryUtilisation },
-		"/gpu/power_watts":          func(gpuInfo *GPUInfo) interface{} { return gpuInfo.PowerWatts },
-		"/gpu/power_limit_watts":    func(gpuInfo *GPUInfo) interface{} { return gpuInfo.PowerLimitWatts },
-		"/gpu/memory_total_gb":      func(gpuInfo *GPUInfo) interface{} { return gpuInfo.MemoryTotal },
-		"/gpu/memory_used_gb":       func(gpuInfo *GPUInfo) interface{} { return gpuInfo.MemoryUsed },
-		"/gpu/memory_free_gb":       func(gpuInfo *GPUInfo) interface{} { return gpuInfo.MemoryFree },
-		"/gpu/memory_usage_percent": func(gpuInfo *GPUInfo) interface{} { return gpuInfo.MemoryUsagePercent },
-		"/gpu/temperature":          func(gpuInfo *GPUInfo) interface{} { return gpuInfo.Temperature },
-		// "/gpu/fan_speed":            func(gpuInfo *GPUInfo) interface{} { return gpuInfo.FanSpeed },
-		"/gpu/all":       func(gpuInfo *GPUInfo) interface{} { return gpuInfo },
-		"/gpu/processes": func(gpuInfo *GPUInfo) interface{} { return gpuInfo.Processes },
+	pathToField := map[string]func(*GPUInfo) any{
+		"/gpu/index":                func(gpuInfo *GPUInfo) any { return gpuInfo.Index },
+		"/gpu/uuid":                 func(gpuInfo *GPUInfo) any { return gpuInfo.UUID },
+		"/gpu/name":                 func(gpuInfo *GPUInfo) any { return gpuInfo.Name },
+		"/gpu/gpu_utilisation":      func(gpuInfo *GPUInfo) any { return gpuInfo.GPUUtilisation },
+		"/gpu/memory_utilisation":   func(gpuInfo *GPUInfo) any { return gpuInfo.MemoryUtilisation },
+		"/gpu/power_watts":          func(gpuInfo *GPUInfo) any { return gpuInfo.PowerWatts },
+		"/gpu/power_limit_watts":    func(gpuInfo *GPUInfo) any { return gpuInfo.PowerLimitWatts },
+		"/gpu/memory_total_gb":      func(gpuInfo *GPUInfo) any { return gpuInfo.MemoryTotal },
+		"/gpu/memory_used_gb":       func(gpuInfo *GPUInfo) any { return gpuInfo.MemoryUsed },
+		"/gpu/memory_free_gb":       func(gpuInfo *GPUInfo) any { return gpuInfo.MemoryFree },
+		"/gpu/memory_usage_percent": func(gpuInfo *GPUInfo) any { return gpuInfo.MemoryUsagePercent },
+		"/gpu/temperature":          func(gpuInfo *GPUInfo) any { return gpuInfo.Temperature },
+		// "/gpu/fan_speed":            func(gpuInfo *GPUInfo) any { return gpuInfo.FanSpeed },
+		"/gpu/all":       func(gpuInfo *GPUInfo) any { return gpuInfo },
+		"/gpu/processes": func(gpuInfo *GPUInfo) any { return gpuInfo.Processes },
 	}
 
 	if *debug {
@@ -1213,7 +1209,7 @@ func handleOriginalGPURoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	*rl.cache = gpuInfos
+	rl.setCache(gpuInfos)
 
 	for _, gpuInfo := range gpuInfos {
 		path := r.URL.Path
@@ -1252,7 +1248,7 @@ func handleGPUOffsetRoutes(w http.ResponseWriter, r *http.Request) {
 	// GET  /gpu/0/offsets/ranges
 
 	if strings.HasSuffix(path, "/offsets/reset") {
-		if r.Method != "POST" {
+		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
@@ -1261,7 +1257,7 @@ func handleGPUOffsetRoutes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if strings.HasSuffix(path, "/offsets/ranges") {
-		if r.Method != "GET" {
+		if r.Method != http.MethodGet {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
@@ -1271,9 +1267,9 @@ func handleGPUOffsetRoutes(w http.ResponseWriter, r *http.Request) {
 
 	if strings.HasSuffix(path, "/offsets") {
 		switch r.Method {
-		case "GET":
+		case http.MethodGet:
 			handleGetOffsets(w, r)
-		case "POST":
+		case http.MethodPost:
 			handleSetOffsets(w, r)
 		default:
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -1353,7 +1349,9 @@ func handleSetOffsets(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Store configuration and apply
+	configMutex.Lock()
 	gpuClockOffsetConfigs[deviceIndex] = config
+	configMutex.Unlock()
 
 	if err := safeApplyClockOffsets(deviceIndex); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to apply offsets: %v", err),
@@ -1361,10 +1359,12 @@ func handleSetOffsets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	refreshClockOffsetCache(deviceIndex)
+
 	response := OffsetResponse{
 		Success: true,
 		Message: "Clock offsets applied successfully",
-		Applied: map[string]interface{}{
+		Applied: map[string]any{
 			"gpu_offsets": req.GPUOffsets,
 			"mem_offsets": req.MemOffsets,
 		},
@@ -1389,7 +1389,11 @@ func handleResetOffsets(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Clear stored configuration
+	configMutex.Lock()
 	delete(gpuClockOffsetConfigs, deviceIndex)
+	configMutex.Unlock()
+
+	refreshClockOffsetCache(deviceIndex)
 
 	response := OffsetResponse{
 		Success: true,
@@ -1422,7 +1426,7 @@ func handleGetOffsetRanges(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ranges := map[string]interface{}{
+	ranges := map[string]any{
 		"gpu_offset_ranges": offsets.GPUOffsets,
 		"mem_offset_ranges": offsets.MemOffsets,
 		"gpu_clock_range":   offsets.GPURange,
@@ -1449,6 +1453,11 @@ func main() {
 		println("***            ***")
 	}
 
+	if *help {
+		flag.Usage()
+		return
+	}
+
 	if *port < 1 || *rate < 1 {
 		flag.Usage()
 		return
@@ -1465,18 +1474,7 @@ func main() {
 		log.Fatalf("no devices found")
 	}
 
-	if *help {
-		flag.Usage()
-		return
-	}
-
-	// Initialise GPU capabilities
-	// if err := initialiseGPUCapabilities(); err != nil {
-	// 	log.Fatalf("Failed to initialise GPU capabilities: %v", err)
-	// }
-
 	// Initialise PCIeStateManager
-	var pcieStateManagerInitialised bool
 	if *enablePCIeStateManagement {
 		log.Println("Initializing PCIe State Manager")
 		devices := make([]nvml.Device, count)
@@ -1490,16 +1488,9 @@ func main() {
 		pcieStateManager = NewPCIeStateManager(devices)
 		pcieStateManager.Start()
 		defer pcieStateManager.Stop()
-		pcieStateManagerInitialised = true
 		log.Println("PCIe State Manager initialized and started")
 	} else {
 		log.Println("PCIe State Management is disabled")
-	}
-
-	// Print any configured power limits
-	for i, limits := range gpuPowerLimits {
-		log.Printf("GPU %d power limits: LowTemp: %d, LowTempLimit: %d W, MediumTemp: %d, MediumTempLimit: %d W, HighTempLimit: %d W",
-			i, limits.LowTemp, limits.LowTempLimit, limits.MediumTemp, limits.MediumTempLimit, limits.HighTempLimit)
 	}
 
 	// Parse temperature-based power limits from environment variables
@@ -1566,6 +1557,12 @@ func main() {
 		}
 	}
 
+	// Seed the offset cache once so metrics polls can report offsets without
+	// re-querying the clock control path every cycle.
+	for i := 0; i < int(count); i++ {
+		refreshClockOffsetCache(i)
+	}
+
 	rl = &rateLimiter{
 		capacity: float64(1),
 		rate:     float64(*rate) / 3600,
@@ -1581,13 +1578,7 @@ func main() {
 					log.Printf("Error updating GPU info: %v", err)
 				}
 			} else {
-				rl.mu.Lock()
-				*rl.cache = gpuInfos
-				rl.mu.Unlock()
-
-				if pcieStateManagerInitialised {
-					pcieStateManager.UpdateUtilisation()
-				}
+				rl.setCache(gpuInfos)
 			}
 			time.Sleep(time.Duration(*rate) * time.Second)
 		}
@@ -1596,19 +1587,14 @@ func main() {
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
-		if !rl.takeToken() {
-			rl.mu.Lock()
-			json.NewEncoder(w).Encode(rl.cache)
-			rl.mu.Unlock()
-			return
+		rl.takeToken()
+		cache := rl.getCache()
+		if err := json.NewEncoder(w).Encode(cache); err != nil && *debug {
+			log.Printf("Error encoding GPU info: %v", err)
 		}
 
-		rl.mu.Lock()
-		json.NewEncoder(w).Encode(rl.cache)
-		rl.mu.Unlock()
-
 		if *debug {
-			fmt.Println("GPU Info: ", rl.cache)
+			fmt.Println("GPU Info: ", cache)
 		}
 	})
 
@@ -1804,11 +1790,11 @@ func (m *PCIeStateManager) UpdateUtilisation() {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
-	log.Println("Starting UpdateUtilisation")
-
 	for i, device := range m.devices {
 		if !m.configs[i].Enabled {
-			log.Printf("GPU %d: PCIe management not enabled, skipping", i)
+			if *debug {
+				log.Printf("GPU %d: PCIe management not enabled, skipping", i)
+			}
 			continue
 		}
 
@@ -1823,33 +1809,24 @@ func (m *PCIeStateManager) UpdateUtilisation() {
 			m.utilisationHistory[i] = m.utilisationHistory[i][1:]
 		}
 
-		log.Printf("GPU %d utilization: %.2f%% (History length: %d)", i, float64(usage.Gpu), len(m.utilisationHistory[i]))
+		if *debug {
+			log.Printf("GPU %d utilization: %.2f%% (History length: %d)", i, float64(usage.Gpu), len(m.utilisationHistory[i]))
+		}
 
 		if m.shouldChangeLinkSpeed(i) {
-			log.Printf("GPU %d: Attempting to change link speed", i)
 			err := m.changeLinkSpeed(i, device)
 			if err != nil {
 				log.Printf("Failed to change link speed for GPU %d: %v", i, err)
-			} else {
-				log.Printf("GPU %d: Successfully changed link speed", i)
 			}
-		} else {
-			log.Printf("GPU %d: No need to change link speed", i)
 		}
 	}
-
-	log.Println("Finished UpdateUtilisation")
 }
 
 func (m *PCIeStateManager) shouldChangeLinkSpeed(index int) bool {
 	history := m.utilisationHistory[index]
 	config := m.configs[index]
 
-	log.Printf("GPU %d: Checking if link speed should change", index)
-	log.Printf("GPU %d: History length: %d, Required: %d", index, len(history), config.IdleThresholdSeconds)
-
 	if len(history) < config.IdleThresholdSeconds {
-		log.Printf("GPU %d: Not enough history to determine if link speed should change", index)
 		return false
 	}
 
@@ -1861,17 +1838,17 @@ func (m *PCIeStateManager) shouldChangeLinkSpeed(index int) bool {
 		}
 	}
 
-	log.Printf("GPU %d: Is idle? %v", index, isIdle)
-
 	if isIdle {
 		lastChange, exists := m.lastChangeTime[index]
 		if !exists || time.Since(lastChange) >= 5*time.Minute {
-			log.Printf("GPU %d: Conditions met to change link speed (idle for %d seconds)", index, config.IdleThresholdSeconds)
+			if *debug {
+				log.Printf("GPU %d: Conditions met to change link speed (idle for %d seconds)", index, config.IdleThresholdSeconds)
+			}
 			return true
 		}
-		log.Printf("GPU %d: Idle, but too soon since last change (%.2f minutes ago)", index, time.Since(lastChange).Minutes())
-	} else {
-		log.Printf("GPU %d: Not idle (utilization above threshold in last %d seconds)", index, config.IdleThresholdSeconds)
+		if *debug {
+			log.Printf("GPU %d: Idle, but too soon since last change (%.2f minutes ago)", index, time.Since(lastChange).Minutes())
+		}
 	}
 
 	return false

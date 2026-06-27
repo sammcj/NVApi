@@ -1,28 +1,31 @@
 # Build stage
-FROM nvcr.io/nvidia/cuda:12.6.1-devel-ubuntu22.04 AS builder
+FROM nvcr.io/nvidia/cuda:13.3.0-devel-ubuntu24.04 AS builder
 
-LABEL org.opencontainers.image.description "NVApi is a lightweight API that exposes NVIDIA GPU metrics"
-
-# install go
-RUN apt update && apt install -y golang git procps
+# install go + git (git for module fetching)
+RUN apt update && apt install -y golang git && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 COPY . /app
 
-
-# build the binary so it's portable and can run in a scratch container
-RUN go build -o /app/nvapi . && \
+# cgo links against libnvidia-ml, so this is not a static binary; the runtime
+# stage below provides a matching glibc and the driver supplies libnvidia-ml.
+RUN go build -ldflags="-s -w" -o /app/nvapi . && \
   chmod +x /app/nvapi
 
 # Runtime stage
-#FROM nvcr.io/nvidia/cuda:12.4.1-runtime-ubuntu22.04
+FROM nvcr.io/nvidia/cuda:13.3.0-runtime-ubuntu24.04
 
-ENV NVIDIA_VISIBLE_DEVICES all
+LABEL org.opencontainers.image.description="NVApi is a lightweight API that exposes NVIDIA GPU metrics"
 
-#WORKDIR /app
+# procps for process lookups when run with pid:host
+RUN apt update && apt install -y procps && rm -rf /var/lib/apt/lists/*
 
-#COPY --from=builder /app/nvapi /app/nvapi
+ENV NVIDIA_VISIBLE_DEVICES=all
+
+WORKDIR /app
+
+COPY --from=builder /app/nvapi /app/nvapi
 
 EXPOSE 9999
 
