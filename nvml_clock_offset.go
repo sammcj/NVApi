@@ -1,5 +1,4 @@
 //go:build linux
-// +build linux
 
 // Native NVML clock offset implementation for Linux with NVIDIA drivers 555+
 

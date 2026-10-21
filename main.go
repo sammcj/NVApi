@@ -311,6 +311,21 @@ func parseTempCheckInterval() {
 
 	tempCheckInterval = time.Duration(interval) * time.Second
 }
+
+// go-nvml links NVML symbols lazily, so calling nvmlDeviceGetTemperatureV on a
+// driver that predates it would crash rather than return an error.
+var hasTemperatureV = sync.OnceValue(func() bool {
+	return nvml.Extensions().LookupSymbol("nvmlDeviceGetTemperatureV") == nil
+})
+
+func gpuTemperature(device nvml.Device) (uint32, nvml.Return) {
+	if !hasTemperatureV() {
+		return device.GetTemperature(nvml.TEMPERATURE_GPU) //nolint:staticcheck // fallback for older drivers
+	}
+	t, ret := device.GetTemperatureV().V1()
+	return uint32(t.Temperature), ret
+}
+
 func checkAndApplyPowerLimits() error {
 	powerCheckMutex.Lock()
 	defer powerCheckMutex.Unlock()
@@ -338,7 +353,7 @@ func checkAndApplyPowerLimits() error {
 
 		// Only apply individual temperature-based limits if they are configured
 		if _, exists := gpuPowerLimits[i]; exists {
-			temperature, ret := device.GetTemperature(nvml.TEMPERATURE_GPU)
+			temperature, ret := gpuTemperature(device)
 			if ret != nvml.SUCCESS {
 				return fmt.Errorf("unable to get temperature for GPU %d: %v", i, nvml.ErrorString(ret))
 			}
@@ -1065,7 +1080,7 @@ func GetGPUInfo() ([]GPUInfo, error) {
 			return nil, fmt.Errorf("unable to get memory info: %v", nvml.ErrorString(ret))
 		}
 
-		temperature, ret := device.GetTemperature(nvml.TEMPERATURE_GPU)
+		temperature, ret := gpuTemperature(device)
 		if ret != nvml.SUCCESS {
 			return nil, fmt.Errorf("unable to get temperature: %v", nvml.ErrorString(ret))
 		}
