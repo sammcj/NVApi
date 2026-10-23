@@ -60,7 +60,11 @@ func parseUPSGuardConfig(getenv func(string) string) (cfg upsGuardConfig, ok boo
 	if cfg.lowW, err = envUint(getenv, "UPS_POWER_LOW", 0); err != nil {
 		return cfg, false, err
 	}
-	if cfg.highW > 0 && cfg.lowW >= cfg.highW {
+	// Deriving only one threshold could put it on the wrong side of the other.
+	if (cfg.highW == 0) != (cfg.lowW == 0) {
+		return cfg, false, errors.New("set both UPS_POWER_HIGH and UPS_POWER_LOW, or neither")
+	}
+	if cfg.lowW >= cfg.highW && cfg.highW > 0 {
 		return cfg, false, fmt.Errorf("UPS_POWER_LOW (%d W) must be below UPS_POWER_HIGH (%d W)", cfg.lowW, cfg.highW)
 	}
 	if cfg.gpuCapW, err = envUint(getenv, "UPS_GPU_POWER_CAP", 0); err != nil {
@@ -68,10 +72,8 @@ func parseUPSGuardConfig(getenv func(string) string) (cfg upsGuardConfig, ok boo
 	}
 
 	cfg.nut = nutClient{
-		addr:     net.JoinHostPort(host, strconv.FormatUint(uint64(port), 10)),
-		username: getenv("UPS_NUT_USERNAME"),
-		password: getenv("UPS_NUT_PASSWORD"),
-		timeout:  5 * time.Second,
+		addr:    net.JoinHostPort(host, strconv.FormatUint(uint64(port), 10)),
+		timeout: 5 * time.Second,
 	}
 	cfg.upsName = strings.TrimSpace(getenv("UPS_NUT_NAME"))
 	cfg.pollInterval = time.Duration(poll) * time.Second
@@ -94,8 +96,9 @@ func envUint(getenv func(string) string, name string, def uint) (uint, error) {
 // upsGuard caps total GPU power while the UPS is heavily loaded, and lifts the
 // cap once the UPS has stayed below the low threshold for the cooldown period.
 type upsGuard struct {
-	cfg  upsGuardConfig
-	capW atomic.Uint32 // GPU cap while active, 0 otherwise; read by the power limit loop
+	cfg      upsGuardConfig
+	capW     atomic.Uint32 // GPU cap while active, 0 otherwise; read by the power limit loop
+	onChange func()        // called when the cap is applied or lifted
 
 	// Owned by the poll goroutine.
 	active   bool
@@ -131,6 +134,7 @@ func (g *upsGuard) observe(powerW, highW, lowW uint, now time.Time) {
 			g.lowSince = time.Time{}
 			g.capW.Store(uint32(g.cfg.gpuCapW))
 			log.Printf("UPS guard: UPS drawing %d W (limit %d W), capping GPUs at %d W total", powerW, highW, g.cfg.gpuCapW)
+			g.changed()
 		}
 		return
 	}
@@ -145,6 +149,13 @@ func (g *upsGuard) observe(powerW, highW, lowW uint, now time.Time) {
 		g.active = false
 		g.capW.Store(0)
 		log.Printf("UPS guard: UPS below %d W for %s, removing GPU cap", lowW, g.cfg.cooldown)
+		g.changed()
+	}
+}
+
+func (g *upsGuard) changed() {
+	if g.onChange != nil {
+		g.onChange()
 	}
 }
 
@@ -178,25 +189,16 @@ func (g *upsGuard) poll(now time.Time) error {
 	return nil
 }
 
-// thresholds returns the configured thresholds, deriving unset ones from the UPS rating.
+// thresholds returns the configured thresholds, or derives both from the UPS rating.
 func (g *upsGuard) thresholds(vars map[string]string) (highW, lowW uint, err error) {
-	highW, lowW = g.cfg.highW, g.cfg.lowW
-	if highW == 0 || lowW == 0 {
-		nominal, err := parseNUTNumber(vars, "ups.realpower.nominal")
-		if err != nil || nominal <= 0 {
-			return 0, 0, errors.New("UPS doesn't report ups.realpower.nominal: set UPS_POWER_HIGH and UPS_POWER_LOW")
-		}
-		if highW == 0 {
-			highW = uint(nominal * defaultUPSHighFraction)
-		}
-		if lowW == 0 {
-			lowW = uint(nominal * defaultUPSLowFraction)
-		}
+	if g.cfg.highW > 0 {
+		return g.cfg.highW, g.cfg.lowW, nil
 	}
-	if lowW >= highW {
-		return 0, 0, fmt.Errorf("UPS low threshold (%d W) must be below the high threshold (%d W)", lowW, highW)
+	nominal, err := parseNUTNumber(vars, "ups.realpower.nominal")
+	if err != nil || nominal <= 0 {
+		return 0, 0, errors.New("UPS doesn't report ups.realpower.nominal: set UPS_POWER_HIGH and UPS_POWER_LOW")
 	}
-	return highW, lowW, nil
+	return uint(nominal * defaultUPSHighFraction), uint(nominal * defaultUPSLowFraction), nil
 }
 
 // run polls the UPS until the process exits.

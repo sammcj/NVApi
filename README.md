@@ -234,17 +234,18 @@ You can set a total power cap for all GPUs without specifying individual tempera
 export GPU_TOTAL_POWER_CAP=400
 ```
 
-1. Each GPU's uncapped limit is its temperature tier limit, or its default power limit if it has no tiers.
+1. Each GPU's uncapped limit is its temperature tier limit. For a GPU without tiers, it is the limit the GPU had when NVApi started.
 2. If the uncapped limits fit under the cap, every GPU gets its uncapped limit.
 3. Otherwise the limits are planned so their sum equals the cap:
-   - GPUs drawing close to their limit share the cap evenly.
+   - Busy GPUs share the cap evenly. A GPU counts as busy for 30 seconds after NVML reports it power throttled, or after it draws within 15W of its limit.
    - Lightly loaded GPUs keep their current draw plus 30W of headroom. The rest of the budget goes to busy GPUs.
    - When a lightly loaded GPU ramps up to its limit, it gets an even share on the next check.
 4. Because the sum of limits stays within the cap, a GPU ramping up can't push total draw over it between checks.
 5. Limits return to their uncapped values as soon as the cap allows.
 6. No limit is set below the GPU's hardware minimum, even if the minimums add up to more than the cap.
+7. A GPU whose power limit or temperature can't be read is left alone and logged once. The other GPUs are still managed.
 
-When any total cap is configured (including the [UPS power guard](#ups-power-guard)), GPUs without temperature tiers are managed too, and restored to their default limit when the cap lifts.
+When any total cap is configured (including the [UPS power guard](#ups-power-guard)), GPUs without temperature tiers are managed too. NVApi lowers them only to fit the cap, and restores the limit they had at startup. Change their limit (e.g. `nvidia-smi -pl`) while NVApi is stopped, or restart it afterwards. A restart while a cap has lowered them makes the lowered limit the new startup limit.
 
 ### UPS Power Guard
 
@@ -257,8 +258,6 @@ The guard is enabled by setting `UPS_NUT_HOST`. Everything else is optional:
 | `UPS_NUT_HOST`      | (disabled)                      | NUT server (upsd) hostname or IP                           |
 | `UPS_NUT_PORT`      | `3493`                          | NUT server port                                            |
 | `UPS_NUT_NAME`      | first UPS listed by upsd        | UPS name, as in `upsc <name>@<host>`                       |
-| `UPS_NUT_USERNAME`  | (none)                          | NUT user, if upsd requires a login to read variables       |
-| `UPS_NUT_PASSWORD`  | (none)                          | NUT password                                               |
 | `UPS_POLL_INTERVAL` | `5`                             | Seconds between UPS reads                                  |
 | `UPS_POWER_HIGH`    | 90% of `ups.realpower.nominal`  | UPS output (W) at or above which GPUs are capped           |
 | `UPS_POWER_LOW`     | 50% of `ups.realpower.nominal`  | UPS output (W) it must stay below for the cap to lift      |
@@ -274,7 +273,10 @@ environment:
   UPS_GPU_POWER_CAP: 500
 ```
 
-- UPS output is read from `ups.realpower`. If the UPS doesn't report it, it is estimated from `ups.load` and `ups.realpower.nominal`. If neither is available, set the thresholds and check the logs for errors.
+- Set both `UPS_POWER_HIGH` and `UPS_POWER_LOW`, or neither.
+- UPS output is read from `ups.realpower`. If the UPS doesn't report it, it is estimated from `ups.load` and `ups.realpower.nominal`. If neither is available (e.g. a UPS reporting only `ups.load` and `ups.power.nominal` in VA), the guard can't work and logs an error.
+- GPU limits are re-planned as soon as the guard trips or lifts, without waiting for the next `GPU_TEMP_CHECK_INTERVAL`.
+- No login is needed: upsd serves UPS variables to any client it accepts connections from.
 - While active, the guard's cap is combined with `GPU_TOTAL_POWER_CAP`, and the lower of the two applies.
 - If upsd can't be reached, the current state is kept and the cooldown restarts once readings resume. A cap is never lifted without readings confirming the load has dropped.
 - With the cap active, UPS output is everything else on the UPS plus the capped GPUs. If that stays above `UPS_POWER_LOW`, the cap holds until the GPU workload ends.

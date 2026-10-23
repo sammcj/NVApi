@@ -10,13 +10,10 @@ import (
 	"time"
 )
 
-// fakeUPSD is a minimal upsd for tests. It serves vars for each UPS, and
-// requires a login when user is set.
+// fakeUPSD is a minimal upsd for tests, serving vars for each UPS.
 type fakeUPSD struct {
-	mu       sync.Mutex
-	ups      map[string]map[string]string
-	user     string
-	password string
+	mu  sync.Mutex
+	ups map[string]map[string]string
 }
 
 func (f *fakeUPSD) set(ups, name, value string) {
@@ -46,26 +43,16 @@ func startFakeUPSD(t *testing.T, f *fakeUPSD) string {
 
 func (f *fakeUPSD) serve(conn net.Conn) {
 	defer func() { _ = conn.Close() }()
-	var user, pass string
 	sc := bufio.NewScanner(conn)
 	for sc.Scan() {
 		fields := strings.Fields(sc.Text())
 		reply := func(format string, a ...any) { _, _ = fmt.Fprintf(conn, format+"\n", a...) }
-		authed := f.user == "" || (user == f.user && pass == f.password)
 		f.mu.Lock()
 		switch {
-		case len(fields) == 2 && fields[0] == "USERNAME":
-			user = strings.Trim(fields[1], `"`)
-			reply("OK")
-		case len(fields) == 2 && fields[0] == "PASSWORD":
-			pass = strings.Trim(fields[1], `"`)
-			reply("OK")
 		case len(fields) == 1 && fields[0] == "LOGOUT":
 			reply("OK Goodbye")
 			f.mu.Unlock()
 			return
-		case !authed:
-			reply("ERR ACCESS-DENIED")
 		case len(fields) == 2 && fields[0] == "LIST" && fields[1] == "UPS":
 			reply("BEGIN LIST UPS")
 			for name := range f.ups {
@@ -129,19 +116,6 @@ func TestNUTClientListUPS(t *testing.T) {
 	}
 }
 
-func TestNUTClientLogin(t *testing.T) {
-	f, c := newFakeUPSD(t, map[string]string{"ups.realpower": "137"})
-	f.user, f.password = "monitor", "secret"
-
-	if _, err := c.getVars("eaton", "ups.realpower"); err == nil {
-		t.Error("expected access denied without credentials")
-	}
-	c.username, c.password = "monitor", "secret"
-	if vars, err := c.getVars("eaton", "ups.realpower"); err != nil || vars["ups.realpower"] != "137" {
-		t.Errorf("getVars with login = %v, %v", vars, err)
-	}
-}
-
 func TestNUTClientConnectError(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -153,11 +127,5 @@ func TestNUTClientConnectError(t *testing.T) {
 	c := nutClient{addr: addr, timeout: time.Second}
 	if _, err := c.getVars("eaton", "ups.realpower"); err == nil {
 		t.Error("expected a connection error")
-	}
-}
-
-func TestNUTQuote(t *testing.T) {
-	if got := nutQuote(`pa ss"w\d`); got != `"pa ss\"w\\d"` {
-		t.Errorf("nutQuote() = %s", got)
 	}
 }

@@ -1214,6 +1214,7 @@ func main() {
 
 	// Parse total power cap from environment variable
 	parseTotalPowerCap()
+	snapshotStartupPowerLimits(int(count))
 
 	upsCfg, upsEnabled, upsErr := parseUPSGuardConfig(os.Getenv)
 	if upsErr != nil {
@@ -1226,6 +1227,7 @@ func main() {
 		}
 		log.Printf("UPS guard: polling upsd at %s every %s, GPU cap %d W, cooldown %s",
 			upsCfg.nut.addr, upsCfg.pollInterval, upsGuardInstance.cfg.gpuCapW, upsCfg.cooldown)
+		upsGuardInstance.onChange = requestPowerCheck
 		go upsGuardInstance.run()
 	}
 

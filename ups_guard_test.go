@@ -33,7 +33,6 @@ func TestParseUPSGuardConfigDefaults(t *testing.T) {
 func TestParseUPSGuardConfigExplicit(t *testing.T) {
 	cfg, ok, err := parseUPSGuardConfig(envMap(map[string]string{
 		"UPS_NUT_HOST": "fd00::1", "UPS_NUT_PORT": "3494", "UPS_NUT_NAME": "eaton",
-		"UPS_NUT_USERNAME": "mon", "UPS_NUT_PASSWORD": "pw",
 		"UPS_POLL_INTERVAL": "2", "UPS_POWER_HIGH": "1100", "UPS_POWER_LOW": "600",
 		"UPS_COOLDOWN": "300", "UPS_GPU_POWER_CAP": "500",
 	}))
@@ -41,7 +40,7 @@ func TestParseUPSGuardConfigExplicit(t *testing.T) {
 		t.Fatalf("got ok=%v err=%v", ok, err)
 	}
 	want := upsGuardConfig{
-		nut:          nutClient{addr: "[fd00::1]:3494", username: "mon", password: "pw", timeout: 5 * time.Second},
+		nut:          nutClient{addr: "[fd00::1]:3494", timeout: 5 * time.Second},
 		upsName:      "eaton",
 		pollInterval: 2 * time.Second,
 		highW:        1100,
@@ -57,6 +56,8 @@ func TestParseUPSGuardConfigExplicit(t *testing.T) {
 func TestParseUPSGuardConfigErrors(t *testing.T) {
 	for name, env := range map[string]map[string]string{
 		"low not below high": {"UPS_POWER_HIGH": "600", "UPS_POWER_LOW": "600"},
+		"only high set":      {"UPS_POWER_HIGH": "400"},
+		"only low set":       {"UPS_POWER_LOW": "400"},
 		"non-numeric":        {"UPS_POWER_HIGH": "1.1kW"},
 		"negative":           {"UPS_COOLDOWN": "-1"},
 		"zero poll interval": {"UPS_POLL_INTERVAL": "0"},
@@ -145,14 +146,22 @@ func TestUPSGuardThresholds(t *testing.T) {
 		t.Errorf("explicit thresholds = %d, %d, %v; want 1100, 600", high, low, err)
 	}
 
-	g.cfg.highW, g.cfg.lowW = 0, 700
+	g.cfg.highW, g.cfg.lowW = 0, 0
 	if _, _, err := g.thresholds(map[string]string{}); err == nil {
-		t.Error("expected an error deriving the high threshold without a UPS rating")
+		t.Error("expected an error deriving thresholds without a UPS rating")
 	}
+}
 
-	g.cfg.highW, g.cfg.lowW = 500, 0 // derived low (600) above explicit high
-	if _, _, err := g.thresholds(map[string]string{"ups.realpower.nominal": "1200"}); err == nil {
-		t.Error("expected an error when the derived low threshold is above the high threshold")
+func TestUPSGuardNotifiesOnChange(t *testing.T) {
+	calls := 0
+	g := &upsGuard{cfg: upsGuardConfig{gpuCapW: 500, cooldown: time.Minute}, onChange: func() { calls++ }}
+	now := time.Now()
+	g.observe(1200, 1100, 600, now)                    // trips
+	g.observe(1200, 1100, 600, now.Add(time.Second))   // still tripped
+	g.observe(100, 1100, 600, now.Add(2*time.Second))  // cooldown starts
+	g.observe(100, 1100, 600, now.Add(70*time.Second)) // released
+	if calls != 2 {
+		t.Errorf("onChange called %d times, want 2 (trip and release)", calls)
 	}
 }
 

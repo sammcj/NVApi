@@ -7,8 +7,8 @@ import (
 )
 
 func TestPlanPowerLimits(t *testing.T) {
-	busy := func(limit uint) gpuBudget { return gpuBudget{base: 340, min: 100, usage: limit - 5, current: limit} }
-	idle := func(limit uint) gpuBudget { return gpuBudget{base: 340, min: 100, usage: 20, current: limit} }
+	busy := func(limit uint) gpuBudget { return gpuBudget{base: 340, min: 100, usage: limit - 5, busy: true} }
+	idle := func(uint) gpuBudget { return gpuBudget{base: 340, min: 100, usage: 20} }
 
 	tests := []struct {
 		name string
@@ -22,7 +22,7 @@ func TestPlanPowerLimits(t *testing.T) {
 		{"busy GPU keeps its base while the other idles", []gpuBudget{busy(340), idle(340)}, 600, []uint{340, 260}},
 		{"idle GPU ramping up at its limit gets an even share", []gpuBudget{busy(340), busy(260)}, 600, []uint{300, 300}},
 		{"busy GPU recovers its base once the other idles", []gpuBudget{busy(300), idle(300)}, 600, []uint{340, 260}},
-		{"cooler tier below its share is kept", []gpuBudget{{base: 250, min: 100, usage: 245, current: 250}, busy(340)}, 600, []uint{250, 340}},
+		{"cooler tier below its share is kept", []gpuBudget{{base: 250, min: 100, usage: 245, busy: true}, busy(340)}, 600, []uint{250, 340}},
 		{"hardware minimums win over the cap", []gpuBudget{busy(340), busy(340)}, 150, []uint{100, 100}},
 		{"base below the minimum is raised to it", []gpuBudget{{base: 50, min: 100}}, 0, []uint{100}},
 		{"previously capped GPUs are restored", []gpuBudget{idle(200), idle(200)}, 680, []uint{340, 340}},
@@ -46,12 +46,11 @@ func TestPlanPowerLimitsInvariants(t *testing.T) {
 		var minSum uint
 		for i := range gpus {
 			minL := uint(50 + r.IntN(100))
-			current := minL + uint(r.IntN(300))
 			gpus[i] = gpuBudget{
-				base:    uint(r.IntN(500)),
-				min:     minL,
-				usage:   uint(r.IntN(int(current) + 1)),
-				current: current,
+				base:  uint(r.IntN(500)),
+				min:   minL,
+				usage: uint(r.IntN(400)),
+				busy:  r.IntN(2) == 0,
 			}
 			minSum += minL
 		}
@@ -67,6 +66,69 @@ func TestPlanPowerLimitsInvariants(t *testing.T) {
 		}
 		if totalCap > 0 && sum > max(totalCap, minSum) {
 			t.Fatalf("limits %v sum to %d, over cap %d for %+v", limits, sum, totalCap, gpus)
+		}
+	}
+}
+
+// Feeds each plan back in as the next cycle's limits, with GPUs drawing up to
+// a natural demand, and checks the limits settle rather than flip-flopping.
+func TestPlanPowerLimitsSettles(t *testing.T) {
+	tests := []struct {
+		name    string
+		natural []uint // what each GPU would draw unlimited
+		cap     uint
+		want    []uint
+	}{
+		{"steady light GPU beside a busy one", []uint{200, 400}, 500, []uint{230, 270}},
+		{"three GPUs, one light", []uint{150, 400, 400}, 700, []uint{180, 260, 260}},
+		{"both busy", []uint{400, 400}, 600, []uint{300, 300}},
+		{"both idle", []uint{20, 20}, 600, []uint{300, 300}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			limits := make([]uint, len(tt.natural))
+			for i := range limits {
+				limits[i] = 350
+			}
+			var history [][]uint
+			for range 6 {
+				gpus := make([]gpuBudget, len(limits))
+				for i, n := range tt.natural {
+					limited := n >= limits[i]
+					usage := n
+					if limited {
+						usage = limits[i] - 5 // averaged draw reads a little under the limit
+					}
+					gpus[i] = gpuBudget{base: 350, min: 100, usage: usage,
+						busy: powerLimited(limited, usage, limits[i])}
+				}
+				limits = planPowerLimits(gpus, tt.cap)
+				history = append(history, limits)
+			}
+			for _, h := range history[2:] {
+				if !slices.Equal(h, tt.want) {
+					t.Fatalf("limits did not settle on %v: %v", tt.want, history)
+				}
+			}
+		})
+	}
+}
+
+func TestPowerLimited(t *testing.T) {
+	tests := []struct {
+		name           string
+		throttled      bool
+		usage, current uint
+		want           bool
+	}{
+		{"throttle reason set", true, 100, 300, true},
+		{"drawing at the limit", false, 295, 300, true},
+		{"granted headroom is not mistaken for busy", false, 200, 230, false},
+		{"idle", false, 20, 300, false},
+	}
+	for _, tt := range tests {
+		if got := powerLimited(tt.throttled, tt.usage, tt.current); got != tt.want {
+			t.Errorf("%s: powerLimited() = %v, want %v", tt.name, got, tt.want)
 		}
 	}
 }

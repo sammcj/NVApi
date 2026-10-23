@@ -11,12 +11,11 @@ import (
 )
 
 // nutClient reads variables from a NUT upsd server (network protocol, RFC 9271).
-// Each call opens its own connection, so an upsd restart needs no reconnect logic.
+// upsd serves reads without a login. Each call opens its own connection, so an
+// upsd restart needs no reconnect logic.
 type nutClient struct {
-	addr     string // host:port
-	username string // optional; upsd serves variables without a login by default
-	password string
-	timeout  time.Duration
+	addr    string // host:port
+	timeout time.Duration
 }
 
 // errNUTVarNotSupported is upsd's reply for a variable the UPS doesn't report.
@@ -37,16 +36,7 @@ func (c nutClient) session(fn func(*nutConn) error) error {
 		return err
 	}
 
-	s := &nutConn{conn: conn, r: bufio.NewReader(conn)}
-	if c.username != "" {
-		if _, err := s.command("USERNAME " + nutQuote(c.username)); err != nil {
-			return fmt.Errorf("upsd login: %w", err)
-		}
-		if _, err := s.command("PASSWORD " + nutQuote(c.password)); err != nil {
-			return fmt.Errorf("upsd login: %w", err)
-		}
-	}
-	err = fn(s)
+	err = fn(&nutConn{conn: conn, r: bufio.NewReader(conn)})
 	_, _ = fmt.Fprint(conn, "LOGOUT\n") // best effort; the connection closes either way
 	return err
 }
@@ -129,9 +119,4 @@ func (c nutClient) getVars(ups string, names ...string) (map[string]string, erro
 		return nil
 	})
 	return vars, err
-}
-
-// nutQuote quotes a command argument, as usernames and passwords may contain spaces.
-func nutQuote(s string) string {
-	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"`
 }

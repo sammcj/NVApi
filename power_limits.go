@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/NVIDIA/go-nvml/pkg/nvml"
@@ -15,24 +16,46 @@ import (
 // totalPowerCap is GPU_TOTAL_POWER_CAP in watts, 0 when unset.
 var totalPowerCap uint
 
-// demandHeadroomW is how far below its current limit a GPU must draw before it
-// counts as not needing that limit. NVML reports averaged draw, so a GPU held
-// at its limit reads a little under it.
+// demandHeadroomW is the headroom above current draw kept by a GPU that isn't
+// power limited, when a total cap squeezes it.
 const demandHeadroomW = 30
+
+// busyHold keeps a GPU classed as busy for a while after it was last power
+// limited. Inference load is bursty, so a single sample can catch it between
+// bursts with a low averaged draw.
+const busyHold = 30 * time.Second
+
+// State owned by checkAndApplyPowerLimits (under powerCheckMutex).
+var (
+	startupPowerLimits  map[int]uint          // limits of GPUs without tiers when NVApi started
+	lastPowerLimited    = map[int]time.Time{} // when each GPU was last seen power limited
+	gpuBudgetErrors     = map[int]string{}    // last read error logged per GPU
+	powerCheckRequested atomic.Bool           // skip the interval gate on the next check
+)
 
 // gpuBudget is one GPU's input to planPowerLimits, all in watts.
 type gpuBudget struct {
-	base    uint // limit without a total cap: the temperature tier, or the default limit
+	base    uint // limit without a total cap: the temperature tier, or the startup limit
 	min     uint // lowest limit the GPU accepts
 	usage   uint // current draw
 	current uint // currently enforced limit
+	busy    bool // power limited recently, so it needs its full share
+}
+
+// powerLimited reports whether a GPU is being held back by its power limit,
+// from NVML's throttle reason or from drawing close to the limit.
+//
+// The draw band is half the headroom a squeezed light GPU is granted, so a
+// light GPU still drawing what it did isn't reclassified as busy next cycle.
+func powerLimited(throttled bool, usage, current uint) bool {
+	return throttled || usage+demandHeadroomW/2 >= current
 }
 
 // planPowerLimits returns a limit per GPU. Without a cap (totalCap 0), or when
 // the base limits already fit under it, each GPU gets its base limit.
-// Otherwise the limits are planned to sum to the cap: GPUs drawing near their
-// limit share it evenly, lightly loaded GPUs keep their draw plus headroom, and
-// whatever is left goes back towards the base limits.
+// Otherwise the limits are planned to sum to the cap: busy GPUs share it
+// evenly, lightly loaded GPUs keep their draw plus headroom, and whatever is
+// left goes back towards the base limits.
 //
 // Capping the sum of limits, rather than reacting once draw exceeds the cap,
 // means a GPU ramping up can't overshoot the cap. Planning from the base limit
@@ -54,7 +77,7 @@ func planPowerLimits(gpus []gpuBudget, totalCap uint) []uint {
 	for i, g := range gpus {
 		limits[i] = g.min
 		demand[i] = bases[i]
-		if g.usage+demandHeadroomW < g.current {
+		if !g.busy {
 			demand[i] = max(g.min, min(bases[i], g.usage+demandHeadroomW))
 		}
 	}
@@ -181,61 +204,97 @@ func sumDefaultPowerLimits(count int) uint {
 	return total
 }
 
-// readGPUBudget gathers the planning inputs for one GPU.
-func readGPUBudget(device nvml.Device, index int) (gpuBudget, error) {
+// snapshotStartupPowerLimits records the current limit of each GPU without
+// temperature tiers. Those GPUs are only lowered to fit a total cap, and this
+// is the limit they return to, so limits set outside NVApi are kept.
+func snapshotStartupPowerLimits(count int) {
+	startupPowerLimits = make(map[int]uint)
+	for i := 0; i < count; i++ {
+		if _, hasTiers := gpuPowerLimits[i]; hasTiers {
+			continue
+		}
+		device, ret := nvml.DeviceGetHandleByIndex(i)
+		if ret != nvml.SUCCESS {
+			continue
+		}
+		if limit, ret := device.GetPowerManagementLimit(); ret == nvml.SUCCESS {
+			startupPowerLimits[i] = uint(limit / 1000)
+		}
+	}
+}
+
+// readGPUBudget gathers the planning inputs for one GPU. Only the current limit
+// (and temperature, for tiered GPUs) are required; GPUs that can't report the
+// rest are planned conservatively.
+func readGPUBudget(device nvml.Device, index int, now time.Time) (gpuBudget, error) {
 	var b gpuBudget
 
-	usage, ret := device.GetPowerUsage()
-	if ret != nvml.SUCCESS {
-		return b, fmt.Errorf("unable to get power usage for GPU %d: %v", index, nvml.ErrorString(ret))
-	}
 	current, ret := device.GetPowerManagementLimit()
 	if ret != nvml.SUCCESS {
-		return b, fmt.Errorf("unable to get power limit for GPU %d: %v", index, nvml.ErrorString(ret))
+		return b, fmt.Errorf("unable to get power limit: %v", nvml.ErrorString(ret))
 	}
-	minLimit, maxLimit, ret := device.GetPowerManagementLimitConstraints()
-	if ret != nvml.SUCCESS {
-		return b, fmt.Errorf("unable to get power limit constraints for GPU %d: %v", index, nvml.ErrorString(ret))
-	}
+	b.current = uint(current / 1000) // NVML reports milliwatts
 
 	if tiers, ok := gpuPowerLimits[index]; ok {
 		temperature, ret := gpuTemperature(device)
 		if ret != nvml.SUCCESS {
-			return b, fmt.Errorf("unable to get temperature for GPU %d: %v", index, nvml.ErrorString(ret))
+			return b, fmt.Errorf("unable to get temperature: %v", nvml.ErrorString(ret))
 		}
 		b.base = tempTierLimit(tiers, uint(temperature))
+	} else if limit, ok := startupPowerLimits[index]; ok {
+		b.base = limit
 	} else {
-		defaultLimit, ret := device.GetPowerManagementDefaultLimit()
-		if ret != nvml.SUCCESS {
-			return b, fmt.Errorf("unable to get default power limit for GPU %d: %v", index, nvml.ErrorString(ret))
-		}
-		b.base = uint(defaultLimit / 1000)
+		return b, fmt.Errorf("no startup power limit recorded")
 	}
 
-	b.usage = uint(usage / 1000) // NVML reports milliwatts
-	b.current = uint(current / 1000)
-	b.min = uint(minLimit / 1000)
-	b.base = min(b.base, uint(maxLimit/1000))
+	if minLimit, maxLimit, ret := device.GetPowerManagementLimitConstraints(); ret == nvml.SUCCESS {
+		b.min = uint(minLimit / 1000)
+		b.base = min(b.base, uint(maxLimit/1000))
+	}
+
+	usage, ret := device.GetPowerUsage()
+	if ret != nvml.SUCCESS {
+		b.busy = true // without a reading, assume it needs its full share
+		return b, nil
+	}
+	b.usage = uint(usage / 1000)
+
+	reasons, ret := device.GetCurrentClocksEventReasons()
+	throttled := ret == nvml.SUCCESS && reasons&nvml.ClocksEventReasonSwPowerCap != 0
+	if powerLimited(throttled, b.usage, b.current) {
+		lastPowerLimited[index] = now
+	}
+	if last, ok := lastPowerLimited[index]; ok && now.Sub(last) < busyHold {
+		b.busy = true
+	}
 	return b, nil
+}
+
+// requestPowerCheck runs a power limit check now rather than at the next interval.
+func requestPowerCheck() {
+	powerCheckRequested.Store(true)
+	if err := checkAndApplyPowerLimits(); err != nil {
+		log.Printf("Warning: Failed to check and apply power limits: %v", err)
+	}
 }
 
 func checkAndApplyPowerLimits() error {
 	powerCheckMutex.Lock()
 	defer powerCheckMutex.Unlock()
 
-	if time.Since(lastTempCheckTime) < tempCheckInterval {
+	if !powerCheckRequested.Swap(false) && time.Since(lastTempCheckTime) < tempCheckInterval {
 		return nil
 	}
 
-	lastTempCheckTime = time.Now()
+	now := time.Now()
+	lastTempCheckTime = now
 
 	count, ret := nvml.DeviceGetCount()
 	if ret != nvml.SUCCESS {
 		return fmt.Errorf("unable to get device count: %v", nvml.ErrorString(ret))
 	}
 
-	// GPUs without temperature tiers are only managed when a total cap can
-	// apply, so they are restored to their default limit once it lifts.
+	// GPUs without temperature tiers are only managed when a total cap can apply.
 	capConfigured := totalPowerCap > 0 || upsGuardInstance != nil
 	totalCap := effectiveTotalCap()
 
@@ -247,13 +306,23 @@ func checkAndApplyPowerLimits() error {
 			continue
 		}
 		device, ret := nvml.DeviceGetHandleByIndex(i)
+		var budget gpuBudget
+		var err error
 		if ret != nvml.SUCCESS {
-			return fmt.Errorf("unable to get device at index %d: %v", i, nvml.ErrorString(ret))
+			err = fmt.Errorf("unable to get device: %v", nvml.ErrorString(ret))
+		} else {
+			budget, err = readGPUBudget(device, i, now)
 		}
-		budget, err := readGPUBudget(device, i)
+		// One GPU failing (e.g. a display card without power management)
+		// mustn't stop the others being managed, so skip it and log once.
 		if err != nil {
-			return err
+			if gpuBudgetErrors[i] != err.Error() {
+				log.Printf("Warning: Not managing power limit of GPU %d: %v", i, err)
+				gpuBudgetErrors[i] = err.Error()
+			}
+			continue
 		}
+		delete(gpuBudgetErrors, i)
 		indices = append(indices, i)
 		devices = append(devices, device)
 		budgets = append(budgets, budget)
