@@ -128,8 +128,6 @@ var (
 	gpuPowerLimits            map[int]TempPowerLimits
 	tempCheckInterval         time.Duration
 	lastTempCheckTime         time.Time
-	totalPowerCap             uint
-	lastTotalPower            uint
 	enablePCIeStateManagement = flag.Bool("enable-pcie-state-management", false, "Enable automatic PCIe link state management")
 	pcieStateManager          *PCIeStateManager
 	gpuClockOffsetConfigs     map[int]ClockOffsetConfig // GPU index → offset config
@@ -211,169 +209,6 @@ func mapUUIDsToIndices() (map[string]int, error) {
 	return uuidToIndex, nil
 }
 
-func parseTotalPowerCap() {
-	capStr := os.Getenv("GPU_TOTAL_POWER_CAP")
-	if capStr == "" {
-		totalPowerCap = 0 // Disabled if not set
-		return
-	}
-
-	capValue, err := strconv.ParseUint(capStr, 10, 32)
-	if err != nil {
-		log.Printf("Warning: Invalid GPU_TOTAL_POWER_CAP value. Total power cap will be disabled.")
-		totalPowerCap = 0
-		return
-	}
-
-	totalPowerCap = uint(capValue)
-}
-
-func applyTotalPowerCap(devices []nvml.Device) error {
-	if totalPowerCap == 0 {
-		return nil // Total power cap is disabled
-	}
-
-	var totalPower uint
-	var currentPowers []uint
-	var maxPowerLimits []uint
-
-	for _, device := range devices {
-		power, ret := device.GetPowerUsage()
-		if ret != nvml.SUCCESS {
-			return fmt.Errorf("unable to get power usage: %v", nvml.ErrorString(ret))
-		}
-		currentPower := uint(power / 1000) // Convert milliwatts to watts
-		totalPower += currentPower
-		currentPowers = append(currentPowers, currentPower)
-
-		maxPowerLimit, ret := device.GetPowerManagementLimit()
-		if ret != nvml.SUCCESS {
-			return fmt.Errorf("unable to get power management limit: %v", nvml.ErrorString(ret))
-		}
-		maxPowerLimits = append(maxPowerLimits, uint(maxPowerLimit/1000)) // Convert milliwatts to watts
-	}
-
-	if totalPower > totalPowerCap {
-		log.Printf("Total power consumption (%d W) exceeds the cap (%d W). Adjusting limits...", totalPower, totalPowerCap)
-
-		excessPower := totalPower - totalPowerCap
-		for i, device := range devices {
-			if currentPowers[i] == 0 {
-				continue // Skip GPUs that aren't consuming power
-			}
-
-			// Calculate how much this GPU should reduce its power
-			reductionRatio := float64(currentPowers[i]) / float64(totalPower)
-			reduction := uint(float64(excessPower) * reductionRatio)
-
-			// Ensure we don't reduce below zero
-			newLimit := maxPowerLimits[i]
-			if reduction < currentPowers[i] {
-				newLimit = currentPowers[i] - reduction
-			}
-
-			if newLimit == maxPowerLimits[i] {
-				continue // already at target; avoid redundant write that wakes the GPU
-			}
-
-			ret := device.SetPowerManagementLimit(uint32(newLimit * 1000)) // Convert watts to milliwatts
-			if ret != nvml.SUCCESS {
-				return fmt.Errorf("unable to set power management limit for GPU %d: %v", i, nvml.ErrorString(ret))
-			}
-			log.Printf("GPU %d power limit adjusted to %d W (current consumption: %d W)", i, newLimit, currentPowers[i])
-		}
-	} else if totalPower >= uint(float64(totalPowerCap)*0.98) && totalPower != lastTotalPower {
-		log.Printf("Warning: Total power consumption (%d W) is approaching the cap (%d W)", totalPower, totalPowerCap)
-	}
-	// Note: there is intentionally no "restore" write here. maxPowerLimits was
-	// just read from each device, so writing it back is a no-op that needlessly
-	// wakes idle GPUs every cycle. Restoring a previously reduced limit would
-	// require the default limit (GetPowerManagementDefaultLimit), not the current
-	// one - see the known total-cap ratchet limitation.
-
-	lastTotalPower = totalPower
-	return nil
-}
-
-func parseTempCheckInterval() {
-	intervalStr := os.Getenv("GPU_TEMP_CHECK_INTERVAL")
-	if intervalStr == "" {
-		tempCheckInterval = 5 * time.Second // Default to 5 seconds if not set
-		return
-	}
-
-	interval, err := strconv.Atoi(intervalStr)
-	if err != nil {
-		log.Printf("Warning: Invalid GPU_TEMP_CHECK_INTERVAL value. Using default of 5 seconds.")
-		tempCheckInterval = 5 * time.Second
-		return
-	}
-
-	tempCheckInterval = time.Duration(interval) * time.Second
-}
-
-// go-nvml links NVML symbols lazily, so calling nvmlDeviceGetTemperatureV on a
-// driver that predates it would crash rather than return an error.
-var hasTemperatureV = sync.OnceValue(func() bool {
-	return nvml.Extensions().LookupSymbol("nvmlDeviceGetTemperatureV") == nil
-})
-
-func gpuTemperature(device nvml.Device) (uint32, nvml.Return) {
-	if !hasTemperatureV() {
-		return device.GetTemperature(nvml.TEMPERATURE_GPU) //nolint:staticcheck // fallback for older drivers
-	}
-	t, ret := device.GetTemperatureV().V1()
-	return uint32(t.Temperature), ret
-}
-
-func checkAndApplyPowerLimits() error {
-	powerCheckMutex.Lock()
-	defer powerCheckMutex.Unlock()
-
-	if time.Since(lastTempCheckTime) < tempCheckInterval {
-		return nil
-	}
-
-	lastTempCheckTime = time.Now()
-
-	count, ret := nvml.DeviceGetCount()
-	if ret != nvml.SUCCESS {
-		return fmt.Errorf("unable to get device count: %v", nvml.ErrorString(ret))
-	}
-
-	var devices []nvml.Device
-
-	for i := 0; i < int(count); i++ {
-		device, ret := nvml.DeviceGetHandleByIndex(i)
-		if ret != nvml.SUCCESS {
-			return fmt.Errorf("unable to get device at index %d: %v", i, nvml.ErrorString(ret))
-		}
-
-		devices = append(devices, device)
-
-		// Only apply individual temperature-based limits if they are configured
-		if _, exists := gpuPowerLimits[i]; exists {
-			temperature, ret := gpuTemperature(device)
-			if ret != nvml.SUCCESS {
-				return fmt.Errorf("unable to get temperature for GPU %d: %v", i, nvml.ErrorString(ret))
-			}
-
-			err := applyPowerLimit(device, i, uint(temperature))
-			if err != nil {
-				log.Printf("Warning: Failed to apply power limit for GPU %d: %v", i, err)
-			}
-		}
-	}
-
-	// Always apply total power cap if it's set, regardless of individual temperature limits
-	err := applyTotalPowerCap(devices)
-	if err != nil {
-		log.Printf("Warning: Failed to apply total power cap: %v", err)
-	}
-
-	return nil
-}
-
 func (rl *rateLimiter) takeToken() bool {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
@@ -416,112 +251,6 @@ func getProcessInfo(pid uint32) (string, []string, error) {
 		return "", nil, nil
 	}
 	return cmdlineArgs[0], cmdlineArgs[1:], nil
-}
-
-// parseTempPowerLimits parses the environment variables for temperature-based power limits
-func parseTempPowerLimits() error {
-	gpuPowerLimits = make(map[int]TempPowerLimits)
-
-	uuidToIndex, err := mapUUIDsToIndices()
-	if err != nil {
-		return fmt.Errorf("failed to map UUIDs to indices: %v", err)
-	}
-
-	for _, env := range os.Environ() {
-		if strings.HasPrefix(env, "GPU_") && strings.Contains(env, "_LOW_TEMP") {
-			parts := strings.SplitN(env, "=", 2)
-			if len(parts) != 2 {
-				continue
-			}
-
-			key := strings.TrimPrefix(parts[0], "GPU_")
-			// Remove all suffixes related to temperature limits
-			key = strings.TrimSuffix(key, "_LOW_TEMP")
-			key = strings.TrimSuffix(key, "_MEDIUM_TEMP")
-			key = strings.TrimSuffix(key, "_HIGH_TEMP")
-			key = strings.TrimSuffix(key, "_LOW_TEMP_LIMIT")
-			key = strings.TrimSuffix(key, "_MEDIUM_TEMP_LIMIT")
-			key = strings.TrimSuffix(key, "_HIGH_TEMP_LIMIT")
-
-			if *debug {
-				log.Printf("Debug: Processing key: %s", key)
-			}
-
-			var index string
-			if strings.Contains(key, "-") {
-				// This is a UUID
-				if idx, ok := uuidToIndex[key]; ok {
-					index = strconv.Itoa(idx)
-				} else {
-					log.Printf("Warning: Unknown GPU UUID %s", key)
-					continue
-				}
-			} else {
-				// This is an index
-				index = key
-			}
-
-			if *debug {
-				log.Printf("Debug: Resolved index: %s", index)
-			}
-
-			// Use the key to construct environment variable names
-			lowTempEnv := fmt.Sprintf("GPU_%s_LOW_TEMP", key)
-			mediumTempEnv := fmt.Sprintf("GPU_%s_MEDIUM_TEMP", key)
-			lowTempLimitEnv := fmt.Sprintf("GPU_%s_LOW_TEMP_LIMIT", key)
-			mediumTempLimitEnv := fmt.Sprintf("GPU_%s_MEDIUM_TEMP_LIMIT", key)
-			highTempLimitEnv := fmt.Sprintf("GPU_%s_HIGH_TEMP_LIMIT", key)
-
-			lowTemp, err := strconv.Atoi(os.Getenv(lowTempEnv))
-			if err != nil {
-				return fmt.Errorf("invalid LOW_TEMP value for GPU %s: %v", key, err)
-			}
-
-			mediumTempStr := os.Getenv(mediumTempEnv)
-			if *debug {
-				log.Printf("Debug: Looking for MEDIUM_TEMP with key: %s, value: %s", mediumTempEnv, mediumTempStr)
-			}
-
-			mediumTemp, err := strconv.Atoi(mediumTempStr)
-			if err != nil {
-				return fmt.Errorf("invalid MEDIUM_TEMP value for GPU %s: %v", key, err)
-			}
-
-			lowTempLimit, err := strconv.ParseUint(os.Getenv(lowTempLimitEnv), 10, 32)
-			if err != nil {
-				return fmt.Errorf("invalid LOW_TEMP_LIMIT value for GPU %s: %v", key, err)
-			}
-
-			mediumTempLimit, err := strconv.ParseUint(os.Getenv(mediumTempLimitEnv), 10, 32)
-			if err != nil {
-				return fmt.Errorf("invalid MEDIUM_TEMP_LIMIT value for GPU %s: %v", key, err)
-			}
-
-			highTempLimit, err := strconv.ParseUint(os.Getenv(highTempLimitEnv), 10, 32)
-			if err != nil {
-				return fmt.Errorf("invalid HIGH_TEMP_LIMIT value for GPU %s: %v", key, err)
-			}
-
-			idx, err := strconv.Atoi(index)
-			if err != nil {
-				return fmt.Errorf("invalid GPU index %s: %v", index, err)
-			}
-
-			if *debug {
-				log.Printf("Debug: Successfully parsed all values for GPU %s", key)
-			}
-
-			gpuPowerLimits[idx] = TempPowerLimits{
-				LowTemp:         lowTemp,
-				MediumTemp:      mediumTemp,
-				LowTempLimit:    uint(lowTempLimit),
-				MediumTempLimit: uint(mediumTempLimit),
-				HighTempLimit:   uint(highTempLimit),
-			}
-		}
-	}
-
-	return nil
 }
 
 // parseClockOffsetConfig parses environment variables for clock offset configuration
@@ -985,41 +714,6 @@ func safeApplyClockOffsets(deviceIndex int) error {
 	return nil
 }
 
-// applyPowerLimit applies the appropriate power limit based on the current temperature
-func applyPowerLimit(device nvml.Device, index int, currentTemp uint) error {
-	limits, exists := gpuPowerLimits[index]
-	if !exists {
-		return nil // No limits set for this GPU
-	}
-
-	var newLimit uint
-	if currentTemp <= uint(limits.LowTemp) {
-		newLimit = limits.LowTempLimit
-	} else if currentTemp <= uint(limits.MediumTemp) {
-		newLimit = limits.MediumTempLimit
-	} else {
-		newLimit = limits.HighTempLimit
-	}
-
-	// Only write when the target differs from the current limit. Re-setting the
-	// same value every cycle is a redundant control-path write that wakes idle
-	// GPUs (and defeats runtime power management).
-	current, ret := device.GetPowerManagementLimit()
-	if ret != nvml.SUCCESS {
-		return fmt.Errorf("unable to get current power management limit: %v", nvml.ErrorString(ret))
-	}
-	if uint(current/1000) == newLimit {
-		return nil
-	}
-
-	ret = device.SetPowerManagementLimit(uint32(newLimit * 1000)) // Convert watts to milliwatts
-	if ret != nvml.SUCCESS {
-		return fmt.Errorf("unable to set power management limit: %v", nvml.ErrorString(ret))
-	}
-
-	return nil
-}
-
 // Updated GetGPUInfo function
 func GetGPUInfo() ([]GPUInfo, error) {
 	var err error
@@ -1083,12 +777,6 @@ func GetGPUInfo() ([]GPUInfo, error) {
 		temperature, ret := gpuTemperature(device)
 		if ret != nvml.SUCCESS {
 			return nil, fmt.Errorf("unable to get temperature: %v", nvml.ErrorString(ret))
-		}
-
-		// Apply power limit based on temperature
-		err := applyPowerLimit(device, i, uint(temperature))
-		if err != nil {
-			log.Printf("Warning: Failed to apply power limit for GPU %d: %v", i, err)
 		}
 
 		// var fanSpeed *uint
@@ -1526,6 +1214,20 @@ func main() {
 
 	// Parse total power cap from environment variable
 	parseTotalPowerCap()
+
+	upsCfg, upsEnabled, upsErr := parseUPSGuardConfig(os.Getenv)
+	if upsErr != nil {
+		log.Fatalf("Error parsing UPS guard configuration: %v", upsErr)
+	}
+	if upsEnabled {
+		upsGuardInstance, upsErr = newUPSGuard(upsCfg, sumDefaultPowerLimits(int(count)))
+		if upsErr != nil {
+			log.Fatalf("Error configuring UPS guard: %v", upsErr)
+		}
+		log.Printf("UPS guard: polling upsd at %s every %s, GPU cap %d W, cooldown %s",
+			upsCfg.nut.addr, upsCfg.pollInterval, upsGuardInstance.cfg.gpuCapW, upsCfg.cooldown)
+		go upsGuardInstance.run()
+	}
 
 	// Parse clock offset configuration from environment variables
 	if err := parseClockOffsetConfig(); err != nil {

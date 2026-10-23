@@ -1,7 +1,7 @@
 FROM golang:1.27 AS go
 
 # Build stage
-FROM nvcr.io/nvidia/cuda:13.3.0-devel-ubuntu24.04 AS builder
+FROM nvcr.io/nvidia/cuda:13.4.3-devel-ubuntu24.04 AS builder
 
 # git for module fetching
 RUN apt update && apt install -y git && rm -rf /var/lib/apt/lists/*
@@ -24,7 +24,7 @@ RUN CGO_CFLAGS="-O2 -g -Wno-deprecated-declarations" go build -ldflags="-s -w" -
   chmod +x /app/nvapi
 
 # Runtime stage
-FROM nvcr.io/nvidia/cuda:13.3.0-runtime-ubuntu24.04
+FROM nvcr.io/nvidia/cuda:13.4.3-runtime-ubuntu24.04
 
 LABEL org.opencontainers.image.description="NVApi is a lightweight API that exposes NVIDIA GPU metrics"
 

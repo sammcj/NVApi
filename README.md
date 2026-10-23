@@ -132,7 +132,7 @@ Replace `<id>` with the index of the GPU (starting from 0).
 Global settings:
 
 - `GPU_TEMP_CHECK_INTERVAL`: The interval between temperature checks and power limit applications (in seconds, default is 5)
-- `GPU_TOTAL_POWER_CAP`: The maximum total power consumption allowed for all GPUs combined (in watts)
+- `GPU_TOTAL_POWER_CAP`: The maximum combined power limit of all GPUs (in watts)
 
 #### Example Configuration
 
@@ -212,7 +212,7 @@ GPU_GPU-14b70e9a-19a8-bc20-fd3e-0f3a1430dc24_MEDIUM_TEMP_LIMIT: 120
 
 The program will automatically adjust the power limits as the GPU temperatures change during operation. This helps manage power consumption and heat generation based on the current workload and thermal conditions.
 
-Additionally, the program will ensure that the total power consumption of all GPUs does not exceed the specified `GPU_TOTAL_POWER_CAP`. If the total power consumption approaches 98% of the cap, a warning will be logged. If the total power consumption exceeds the cap, the power limits of all GPUs will be proportionally reduced to meet the cap.
+Additionally, the program keeps the sum of all GPU power limits within `GPU_TOTAL_POWER_CAP` (see [Total Power Cap](#total-power-cap-only-configuration)). The temperature tier sets each GPU's uncapped limit, and the total cap can only lower it.
 
 If you don't set these environment variables, the automated power limiting feature will not be active, and the GPUs will use their default power limits.
 
@@ -234,17 +234,53 @@ You can set a total power cap for all GPUs without specifying individual tempera
 export GPU_TOTAL_POWER_CAP=400
 ```
 
-1. The total power cap is applied based on the actual power consumption of all GPUs, not their maximum power limits.
-2. If the total actual power consumption exceeds the cap:
-   - Power limits are adjusted proportionally to each GPU's current consumption.
-   - GPUs that aren't consuming power (idle GPUs) are not affected.
-   - Busy GPUs may retain more of their power budget, allowing for efficient use of available power.
-3. When the total power consumption is below the cap:
-   - All GPUs are allowed to use up to their maximum power limits.
-   - This allows individual GPUs to use more power when others are idle, as long as the total consumption remains under the cap.
-4. If the total power consumption approaches 98% of the cap, a warning is logged.
+1. Each GPU's uncapped limit is its temperature tier limit, or its default power limit if it has no tiers.
+2. If the uncapped limits fit under the cap, every GPU gets its uncapped limit.
+3. Otherwise the limits are planned so their sum equals the cap:
+   - GPUs drawing close to their limit share the cap evenly.
+   - Lightly loaded GPUs keep their current draw plus 30W of headroom. The rest of the budget goes to busy GPUs.
+   - When a lightly loaded GPU ramps up to its limit, it gets an even share on the next check.
+4. Because the sum of limits stays within the cap, a GPU ramping up can't push total draw over it between checks.
+5. Limits return to their uncapped values as soon as the cap allows.
+6. No limit is set below the GPU's hardware minimum, even if the minimums add up to more than the cap.
 
-This approach ensures that the total power cap is respected while allowing for flexible and efficient use of available power across all GPUs.
+When any total cap is configured (including the [UPS power guard](#ups-power-guard)), GPUs without temperature tiers are managed too, and restored to their default limit when the cap lifts.
+
+### UPS Power Guard
+
+NVApi can watch a UPS through a [NUT](https://networkupstools.org/) server and lower the total GPU power cap while the UPS is heavily loaded. Once the UPS has stayed below a lower threshold for a cooldown period, the cap is lifted.
+
+The guard is enabled by setting `UPS_NUT_HOST`. Everything else is optional:
+
+| Variable            | Default                         | Description                                                |
+| ------------------- | ------------------------------- | ---------------------------------------------------------- |
+| `UPS_NUT_HOST`      | (disabled)                      | NUT server (upsd) hostname or IP                           |
+| `UPS_NUT_PORT`      | `3493`                          | NUT server port                                            |
+| `UPS_NUT_NAME`      | first UPS listed by upsd        | UPS name, as in `upsc <name>@<host>`                       |
+| `UPS_NUT_USERNAME`  | (none)                          | NUT user, if upsd requires a login to read variables       |
+| `UPS_NUT_PASSWORD`  | (none)                          | NUT password                                               |
+| `UPS_POLL_INTERVAL` | `5`                             | Seconds between UPS reads                                  |
+| `UPS_POWER_HIGH`    | 90% of `ups.realpower.nominal`  | UPS output (W) at or above which GPUs are capped           |
+| `UPS_POWER_LOW`     | 50% of `ups.realpower.nominal`  | UPS output (W) it must stay below for the cap to lift      |
+| `UPS_COOLDOWN`      | `600`                           | Seconds below `UPS_POWER_LOW` before the cap lifts         |
+| `UPS_GPU_POWER_CAP` | 50% of the GPUs' default limits | Total GPU power cap (W) while the guard is active          |
+
+```yaml
+environment:
+  UPS_NUT_HOST: 192.168.1.10
+  UPS_POWER_HIGH: 1100
+  UPS_POWER_LOW: 600
+  UPS_COOLDOWN: 600
+  UPS_GPU_POWER_CAP: 500
+```
+
+- UPS output is read from `ups.realpower`. If the UPS doesn't report it, it is estimated from `ups.load` and `ups.realpower.nominal`. If neither is available, set the thresholds and check the logs for errors.
+- While active, the guard's cap is combined with `GPU_TOTAL_POWER_CAP`, and the lower of the two applies.
+- If upsd can't be reached, the current state is kept and the cooldown restarts once readings resume. A cap is never lifted without readings confirming the load has dropped.
+- With the cap active, UPS output is everything else on the UPS plus the capped GPUs. If that stays above `UPS_POWER_LOW`, the cap holds until the GPU workload ends.
+- State changes and read errors are logged.
+
+Test that NVApi's host or container can read the UPS with `upsc <name>@<host> ups.realpower`.
 
 ### PCIe Link Speed
 
